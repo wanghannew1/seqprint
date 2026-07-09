@@ -84,7 +84,7 @@ def _read_icbc_rows(filepath):
 
 
 def _read_ccb_rows(filepath):
-    """读取建设银行 9 列格式，行名填'建设银行'"""
+    """读取建设银行 9 列格式，按模板要求：跨行标识填0，行名留空"""
     wb = xlrd.open_workbook(filepath)
     ws = wb.sheet_by_index(0)
     rows = []
@@ -96,16 +96,15 @@ def _read_ccb_rows(filepath):
             row.append(val)
         # 序号重新生成
         row[0] = seq
-        # 行名填建设银行
-        row[5] = "建设银行"
-        # 跨行标识留空
-        row[4] = ""
+        # 模板要求：建行跨行标识填0，行名留空
+        row[4] = "0"
+        row[5] = ""
         rows.append(row)
     return rows
 
 
 def _read_jlb_rows(filepath):
-    """读取吉林银行 9 列格式，行名有值用值无则'吉林银行'"""
+    """读取吉林银行 9 列格式，按模板要求：跨行标识填1，行名有值用值无则'吉林银行'"""
     wb = xlrd.open_workbook(filepath)
     ws = wb.sheet_by_index(0)
     rows = []
@@ -117,6 +116,8 @@ def _read_jlb_rows(filepath):
             row.append(val)
         # 序号重新生成
         row[0] = seq
+        # 模板要求：他行跨行标识填1
+        row[4] = "1"
         # 行名：有值用值，无则"吉林银行"
         bank_name = str(row[5]).strip()
         if not bank_name:
