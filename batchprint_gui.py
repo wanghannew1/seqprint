@@ -403,6 +403,115 @@ def batch_print(matched_pairs, progress_callback=None):
     return (success_count, fail_count, fail_list)
 
 
+def generate_report_xlsx(output_dir, renamed_count, matched, unmatched, duplicates,
+                         success=None, fail=None, fail_list=None):
+    """
+    生成合并打印操作记录 xlsx
+    matched: [(merged_filename, payroll_filepath, unit_name), ...]
+    unmatched: [payroll_filename, ...]
+    duplicates: {unit_name: [filenames, ...], ...}
+    success/fail/fail_list: 打印结果（仅打印模式有值）
+    返回: 报告文件路径
+    """
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_path = os.path.join(output_dir, f"操作记录_{ts}.xlsx")
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "操作记录"
+
+    # ── 标题行 ──
+    ws.cell(row=1, column=1, value="合并打印操作记录")
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    ws.cell(row=1, column=1).font = openpyxl.styles.Font(bold=True, size=14)
+
+    # ── 汇总信息 ──
+    row = 3
+    ws.cell(row=row, column=1, value="银行报盘文件数")
+    ws.cell(row=row, column=2, value=renamed_count)
+    row += 1
+    ws.cell(row=row, column=1, value="合并文件数")
+    ws.cell(row=row, column=2, value=len(matched))
+    row += 1
+    if success is not None:
+        ws.cell(row=row, column=1, value="打印成功数")
+        ws.cell(row=row, column=2, value=success)
+        row += 1
+        ws.cell(row=row, column=1, value="打印失败数")
+        ws.cell(row=row, column=2, value=fail)
+        row += 1
+    ws.cell(row=row, column=1, value="未匹配到报盘的工资表数")
+    ws.cell(row=row, column=2, value=len(unmatched))
+    row += 1
+    ws.cell(row=row, column=1, value="存在多个工资表的单位数")
+    ws.cell(row=row, column=2, value=len(duplicates))
+
+    # ── 明细表头 ──
+    row += 2
+    headers = ["序号", "单位名称", "合并文件", "工资表文件", "匹配状态", "打印状态", "备注"]
+    for ci, h in enumerate(headers, 1):
+        cell = ws.cell(row=row, column=ci, value=h)
+        cell.font = openpyxl.styles.Font(bold=True)
+        cell.fill = openpyxl.styles.PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+
+    # 建立打印结果查找表：unit_name -> "成功"/"失败"/"未打印"
+    print_status = {}
+    if success is not None:
+        # 默认未打印
+        for _, _, unit_name in matched:
+            print_status[unit_name] = "未打印"
+        # 覆盖成功/失败
+        for merged_name, payroll_path, unit_name in matched:
+            if payroll_path is None:
+                print_status[unit_name] = "未打印（无工资表）"
+        # 如果有 fail_list，标记失败
+        for merged_name, unit_name in (fail_list or []):
+            print_status[unit_name] = "失败"
+        # 其余标记成功（排除了无工资表的和失败的）
+        for merged_name, payroll_path, unit_name in matched:
+            if payroll_path and print_status.get(unit_name) == "未打印":
+                print_status[unit_name] = "成功"
+    else:
+        for _, _, unit_name in matched:
+            print_status[unit_name] = "未打印"
+
+    # ── 明细数据 ──
+    for idx, (merged_name, payroll_path, unit_name) in enumerate(matched, 1):
+        row += 1
+        ws.cell(row=row, column=1, value=idx)
+        ws.cell(row=row, column=2, value=unit_name)
+        ws.cell(row=row, column=3, value=merged_name)
+        ws.cell(row=row, column=4, value=os.path.basename(payroll_path) if payroll_path else "")
+        ws.cell(row=row, column=5, value="已匹配" if payroll_path else "未找到")
+        ws.cell(row=row, column=6, value=print_status.get(unit_name, ""))
+        # 备注：重复文件提示
+        note = ""
+        if unit_name in duplicates:
+            note = f"存在多个工资表文件，仅使用 {os.path.basename(payroll_path) if payroll_path else '第一个'}"
+        ws.cell(row=row, column=7, value=note)
+
+    # ── 未匹配工资表 ──
+    if unmatched:
+        row += 2
+        ws.cell(row=row, column=1, value="未匹配到银行报盘的工资表：")
+        ws.cell(row=row, column=1).font = openpyxl.styles.Font(bold=True, color="FF0000")
+        for fname in unmatched:
+            row += 1
+            ws.cell(row=row, column=1, value=fname)
+
+    # 列宽
+    ws.column_dimensions["A"].width = 8
+    ws.column_dimensions["B"].width = 30
+    ws.column_dimensions["C"].width = 50
+    ws.column_dimensions["D"].width = 40
+    ws.column_dimensions["E"].width = 12
+    ws.column_dimensions["F"].width = 12
+    ws.column_dimensions["G"].width = 45
+
+    wb.save(report_path)
+    return report_path
+
+
 # ──────────────────────────────────────────────
 # GUI 界面
 # ──────────────────────────────────────────────
@@ -667,6 +776,16 @@ class BatchPrintGUI:
             for merged_name, unit_name in fail_list:
                 self.log(f"  ✗ {unit_name} ({merged_name})")
 
+        # 生成操作记录
+        try:
+            report_path = generate_report_xlsx(
+                self.output_dir, len(renamed), matched,
+                unmatched, duplicates, success, fail, fail_list
+            )
+            self.log(f"  📄 操作记录已保存：{report_path}")
+        except Exception as e:
+            self.log(f"  ✗ 操作记录生成失败：{e}")
+
         self.log("=" * 50)
         self._set_busy(False)
 
@@ -729,6 +848,16 @@ class BatchPrintGUI:
 
         self.log("")
         self.log("合并流程完成，未执行打印。")
+
+        # 生成操作记录
+        try:
+            report_path = generate_report_xlsx(
+                self.output_dir, len(renamed), matched, unmatched, duplicates
+            )
+            self.log(f"  📄 操作记录已保存：{report_path}")
+        except Exception as e:
+            self.log(f"  ✗ 操作记录生成失败：{e}")
+
         self.log("=" * 50)
         self._set_busy(False)
 
