@@ -826,7 +826,10 @@ class BatchPrintGUI:
             self.log(f"  [{current}/{total}] {message}")
             self.root.update()
 
-        success, fail, fail_list = batch_print(matched, progress_cb)
+        # 仅打印匹配到工资表的单位
+        matched_to_print = [(m, p, u) for m, p, u in matched if p is not None]
+        self.log(f"  实际需打印：{len(matched_to_print)} 个（未匹配的 {len(matched) - len(matched_to_print)} 个已跳过）")
+        success, fail, fail_list = batch_print(matched_to_print, progress_cb)
 
         self.log("")
         self.log(f"打印完成：成功 {success}，失败 {fail}")
