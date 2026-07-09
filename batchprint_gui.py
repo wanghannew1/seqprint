@@ -69,6 +69,16 @@ def rename_bank_files(bank_dir, output_dir):
     return result
 
 
+def _to_number(val):
+    """将 xlrd 读取的值转为数字（金额列用），文本也转成 float"""
+    if isinstance(val, (int, float)):
+        return float(val)
+    try:
+        return float(str(val).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def _read_icbc_rows(filepath):
     """读取工商银行 3 列格式，映射为建设银行 9 列"""
     wb = xlrd.open_workbook(filepath)
@@ -78,7 +88,7 @@ def _read_icbc_rows(filepath):
         seq = len(rows) + 1
         account = str(ws.cell_value(r, 0)).strip()
         name = str(ws.cell_value(r, 1)).strip()
-        amount = ws.cell_value(r, 2)
+        amount = _to_number(ws.cell_value(r, 2))
         rows.append([seq, account, name, amount, "1", "工商银行", "", "", ""])
     return rows
 
@@ -93,6 +103,9 @@ def _read_ccb_rows(filepath):
         row = []
         for c in range(9):
             val = ws.cell_value(r, c)
+            # 金额列（索引3）转数字
+            if c == 3:
+                val = _to_number(val)
             row.append(val)
         # 序号重新生成
         row[0] = seq
@@ -113,6 +126,9 @@ def _read_jlb_rows(filepath):
         row = []
         for c in range(9):
             val = ws.cell_value(r, c)
+            # 金额列（索引3）转数字
+            if c == 3:
+                val = _to_number(val)
             row.append(val)
         # 序号重新生成
         row[0] = seq
