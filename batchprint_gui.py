@@ -263,6 +263,7 @@ def match_payroll_files(merged_files_list, payroll_dir):
 
     # 对每个合并文件进行匹配
     matched_units = set()
+    duplicates = {}  # unit_name -> [all matched filenames]
     for merged_name in merged_files_list:
         # 提取单位名：第一个 '-202606-' 之前的部分（去掉序号前缀）
         raw_unit = merged_name.split("-202606-", 1)[0]
@@ -274,6 +275,11 @@ def match_payroll_files(merged_files_list, payroll_dir):
         if unit_name in payroll_index:
             matched_units.add(unit_name)
             candidates = payroll_index[unit_name]
+            # 记录所有候选文件，用于重复检测
+            all_candidates = [f for _, f in candidates]
+            if len(all_candidates) > 1:
+                duplicates[unit_name] = all_candidates
+
             # 优先级：signed_ > 非 signed_，同优先级下 .xlsx > .xls
             signed = [f for s, f in candidates if s]
             unsigned = [f for s, f in candidates if not s]
@@ -297,7 +303,7 @@ def match_payroll_files(merged_files_list, payroll_dir):
             _, fname = candidates[0]
             unmatched.append(fname)
 
-    return result, unmatched
+    return result, unmatched, duplicates
 
 
 # ──────────────────────────────────────────────
@@ -590,12 +596,18 @@ class BatchPrintGUI:
         # 步骤 3：匹配工资表
         self.log("【步骤3】匹配工资表文件...")
         try:
-            matched, unmatched = match_payroll_files(merged, self.payroll_dir)
+            matched, unmatched, duplicates = match_payroll_files(merged, self.payroll_dir)
             matched_count = sum(1 for _, fp, _ in matched if fp is not None)
             self.log(f"  ✓ 匹配完成：{matched_count}/{len(matched)} 匹配成功")
             for merged_name, payroll_path, unit_name in matched:
                 status = f"→ {payroll_path}" if payroll_path else "✗ 未找到匹配"
                 self.log(f"    {unit_name}: {status}")
+            if duplicates:
+                self.log(f"  ⚠ 以下单位存在多个工资表文件，仅使用第一个：")
+                for unit_name, files in duplicates.items():
+                    self.log(f"    {unit_name}:")
+                    for f in files:
+                        self.log(f"      - {f}")
             if unmatched:
                 self.log(f"  ⚠ 以下 {len(unmatched)} 个工资表未匹配到银行报盘，不参与打印：")
                 for fname in unmatched:
@@ -692,7 +704,7 @@ class BatchPrintGUI:
         # 步骤 3：匹配
         self.log("【步骤3】匹配工资表文件...")
         try:
-            matched, unmatched = match_payroll_files(merged, self.payroll_dir)
+            matched, unmatched, duplicates = match_payroll_files(merged, self.payroll_dir)
             # 文件名已带序号前缀，字典序即正确顺序
             matched.sort(key=lambda x: x[0])
             matched_count = sum(1 for _, fp, _ in matched if fp is not None)
@@ -700,6 +712,12 @@ class BatchPrintGUI:
             for merged_name, payroll_path, unit_name in matched:
                 status = f"→ {payroll_path}" if payroll_path else "✗ 未找到匹配"
                 self.log(f"    {unit_name}: {status}")
+            if duplicates:
+                self.log(f"  ⚠ 以下单位存在多个工资表文件，仅使用第一个：")
+                for unit_name, files in duplicates.items():
+                    self.log(f"    {unit_name}:")
+                    for f in files:
+                        self.log(f"      - {f}")
             if unmatched:
                 self.log(f"  ⚠ 以下 {len(unmatched)} 个工资表未匹配到银行报盘，不参与打印：")
                 for fname in unmatched:
