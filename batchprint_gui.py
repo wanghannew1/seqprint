@@ -97,7 +97,7 @@ def _read_icbc_rows(filepath, warnings):
         amount, warned = _to_decimal(ws.cell_value(r, 2))
         if warned:
             warnings.append(f"{os.path.basename(filepath)} 第{r+1}行 {name} 金额 {ws.cell_value(r, 2)} 含分以下数值，已舍去")
-        rows.append([seq, account, name, amount, "1", "工商银行", "", "", ""])
+        rows.append([seq, account, name, amount, "", "", "", "", ""])
     return rows
 
 
