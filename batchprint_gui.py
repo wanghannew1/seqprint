@@ -6,7 +6,7 @@ import os
 import shutil
 import tkinter as tk
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from tkinter import filedialog, messagebox, scrolledtext
 
 import openpyxl
