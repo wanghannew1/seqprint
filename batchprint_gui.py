@@ -185,12 +185,22 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
             all_rows.extend(bank_rows)
             bank_summary.append((bank_name, len(bank_rows)))
 
-        # 构建合并文件名（加序号前缀，保证 ls 和资源管理器排序一致）
+        # 构建合并文件名（加序号前缀 + 总计金额后缀）
         seq_prefix = str(idx).zfill(pad_width)
         parts = [f"{seq_prefix}_{unit_name}", yearmon]
         for bank_name, count in bank_summary:
             parts.append(f"{bank_name}{count}")
-        merged_name = "-".join(parts) + ".xlsx"
+
+        # 计算总计金额（元角分）
+        total_fen = 0
+        for row in all_rows:
+            amt = float(row[3])
+            total_fen += int(round(amt * 100))
+        yuan = total_fen // 100
+        jiao = (total_fen % 100) // 10
+        fen = total_fen % 10
+
+        merged_name = "-".join(parts) + f"-总计{yuan}元{jiao}角{fen}分.xlsx"
         merged_path = os.path.join(output_dir, merged_name)
 
         # 写入
