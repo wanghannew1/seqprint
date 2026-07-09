@@ -1,0 +1,14 @@
+[project]
+name = "batch-print"
+version = "1.0.0"
+description = "批量银行报盘合并与工资表打印工具"
+requires-python = ">=3.10"
+dependencies = [
+    "xlrd>=2.0.0",
+    "openpyxl>=3.1.0",
+    "pandas>=2.0.0",
+    "pywin32>=306",
+]
+
+[project.scripts]
+batch-print = "batchprint_gui:main"
