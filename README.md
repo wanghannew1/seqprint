@@ -25,10 +25,10 @@
 2. 双击 `run_batch_print.ps1` 启动，脚本会自动安装依赖并运行。
    （pyproject.toml 已配置清华镜像源，下载速度更快）
 
-### 方式二：使用 pip
+### 方式二：使用 uv pip（已有 uv 环境时）
 
 ```powershell
-pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+uv pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 python batchprint_gui.py
 ```
 
