@@ -3,7 +3,6 @@
 """
 
 import os
-import re
 import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
@@ -12,22 +11,6 @@ import openpyxl
 import xlrd
 
 HEADERS = ["序号", "账户", "户名", "金额", "跨行标识", "行名", "联行行号", "摘要", "备注"]
-
-
-def natural_sort_key(s):
-    """
-    自然排序键函数，与 Windows 资源管理器的排序一致。
-    例如：A97 排在 A123 前面（因为 97 < 123）。
-    用法：sorted(files, key=natural_sort_key)
-    """
-    parts = re.split(r"(\d+)", s)
-    result = []
-    for part in parts:
-        if part.isdigit():
-            result.append(int(part))
-        else:
-            result.append(part.lower())
-    return result
 
 
 def split_filename(filename):
@@ -165,7 +148,11 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
 
     merged_files = []
 
-    for unit_name, entries in sorted(units.items()):
+    # 计算序号位数（根据文件总数）
+    total_units = len(units)
+    pad_width = len(str(total_units))
+
+    for idx, (unit_name, entries) in enumerate(sorted(units.items()), start=1):
         # 按银行分组
         bank_groups = {}
         yearmon = None
@@ -197,8 +184,9 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
             all_rows.extend(bank_rows)
             bank_summary.append((bank_name, len(bank_rows)))
 
-        # 构建合并文件名
-        parts = [unit_name, yearmon]
+        # 构建合并文件名（加序号前缀，保证 ls 和资源管理器排序一致）
+        seq_prefix = str(idx).zfill(pad_width)
+        parts = [f"{seq_prefix}_{unit_name}", yearmon]
         for bank_name, count in bank_summary:
             parts.append(f"{bank_name}{count}")
         merged_name = "-".join(parts) + ".xlsx"
@@ -214,7 +202,7 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
         wb.save(merged_path)
         merged_files.append(merged_name)
 
-    return sorted(merged_files, key=natural_sort_key)
+    return sorted(merged_files)
 
 
 def match_payroll_files(merged_files_list, payroll_dir):
@@ -264,8 +252,10 @@ def match_payroll_files(merged_files_list, payroll_dir):
 
     # 对每个合并文件进行匹配
     for merged_name in merged_files_list:
-        # 提取单位名：第一个 '-202606-' 之前的部分
-        unit_name = merged_name.split("-202606-", 1)[0]
+        # 提取单位名：第一个 '-202606-' 之前的部分（去掉序号前缀）
+        raw_unit = merged_name.split("-202606-", 1)[0]
+        # 去掉开头的序号前缀 "001_"
+        unit_name = raw_unit.split("_", 1)[1] if "_" in raw_unit else raw_unit
 
         matched_file = None
 
@@ -580,8 +570,8 @@ class BatchPrintGUI:
             return
 
         # 步骤 4：打印（需要用户确认）
-        # 按合并文件名自然排序，与 Windows 资源管理器排序一致
-        matched.sort(key=lambda x: natural_sort_key(x[0]))
+        # 文件名已带序号前缀，字典序即正确顺序
+        matched.sort(key=lambda x: x[0])
         self.log("")
         self.log("【步骤4】准备打印...")
 
@@ -667,8 +657,8 @@ class BatchPrintGUI:
         self.log("【步骤3】匹配工资表文件...")
         try:
             matched = match_payroll_files(merged, self.payroll_dir)
-            # 按合并文件名自然排序，与 Windows 资源管理器排序一致
-            matched.sort(key=lambda x: natural_sort_key(x[0]))
+            # 文件名已带序号前缀，字典序即正确顺序
+            matched.sort(key=lambda x: x[0])
             matched_count = sum(1 for _, fp, _ in matched if fp is not None)
             self.log(f"  ✓ 匹配完成：{matched_count}/{len(matched)} 匹配成功")
             for merged_name, payroll_path, unit_name in matched:
