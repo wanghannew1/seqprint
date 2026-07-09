@@ -509,11 +509,12 @@ class BatchPrintGUI:
     # ── 目录选择 ──────────────────────────────
 
     def _set_default_output_dir(self):
-        """根据银行报盘目录自动设置输出目录"""
+        """根据银行报盘目录自动设置输出目录（同级目录）"""
         if not self.bank_dir:
             return
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_dir = os.path.join(self.bank_dir, f"合并后的银行报盘_{ts}")
+        parent = os.path.dirname(self.bank_dir)
+        default_dir = os.path.join(parent, f"合并后的银行报盘_{ts}")
         self.output_dir = default_dir
         self.output_dir_label.config(text=f"输出目录：{default_dir}")
 
