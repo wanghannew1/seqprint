@@ -450,9 +450,9 @@ class BatchPrintGUI:
         )
         self.log_area.pack(fill=tk.BOTH, expand=True)
 
-        # ── 按钮区域 ──
+        # ── 按钮区域（固定在底部） ──
         btn_frame = tk.Frame(self.root, padx=12, pady=10)
-        btn_frame.pack(fill=tk.X)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
         self.run_all_btn = tk.Button(
             btn_frame,
