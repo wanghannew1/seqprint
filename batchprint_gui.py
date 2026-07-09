@@ -665,6 +665,239 @@ def _get_common_columns(all_headers):
     return [(i, base_names[i]) for i in range(len(base_names))], unique_map
 
 
+def _detect_column_structure(headers):
+    """检测工资表的列结构类型，返回列名列表和特殊列信息"""
+    row3 = [str(v or "").strip() for v in headers[2]]
+    row4 = [str(v or "").strip() for v in headers[3]] if len(headers) > 3 else []
+    row5 = [str(v or "").strip() for v in headers[4]] if len(headers) > 4 else []
+
+    # 构建列名（合并行3-5的信息）
+    col_names = []
+    for c in range(len(row3)):
+        name = row3[c]
+        # 扣款明细主列名
+        if "扣" in name and "款" in name:
+            name = "扣款明细"
+        col_names.append(name)
+
+    # 检测特殊列
+    special_cols = {}
+    for c, name in enumerate(col_names):
+        if "补发工资" in name:
+            special_cols["补发工资"] = c
+        elif "大病险" in name:
+            special_cols["大病险"] = c
+        elif "雇主责任险" in name:
+            special_cols["雇主责任险"] = c
+        elif "公务员医疗补助" in name:
+            special_cols["公务员医疗补助"] = c
+        elif "单位缴纳五险一金" in name:
+            special_cols["单位缴纳五险一金"] = c
+
+    # 检查行4/5中是否有公务员医疗补助
+    for r in [row4, row5]:
+        for c, v in enumerate(r):
+            if "公务员医疗补助" in v:
+                special_cols["公务员医疗补助"] = c
+
+    return col_names, special_cols
+
+
+def _build_universal_column_map(col_names, special_cols):
+    """将任意列结构映射到统一输出列（删除部门/岗位/职工号，保留特殊列）
+    返回: (output_cols, delete_indices)
+    output_cols: 输出列索引列表（0-based），每个元素为 (输出列索引, 原始列索引)
+    delete_indices: 被删除的原始列索引
+    """
+    # 标准列顺序（所有文件都有）
+    # 序号(0), 姓名(1), 身份证(2), 部门(3), 岗位(4), 职工号(5),
+    # 基本工资(6), 交通补贴(7) / 补发工资(7), 应发工资(8/9),
+    # 单位缴纳五险一金(9/10), 单位代理费(10/11), 大病险(11/12),
+    # 雇主责任险(11/12), 转账合计(11/12/13),
+    # 社保基数(12/13/14), 医保基数(13/14/15), 工伤基数(14/15/16), 公积金基数(15/16/17),
+    # 扣款明细(16-26/17-27), 个人所得税(27/28), 实发工资(28/29), 实发合计(29/30)
+
+    # 删除列：部门(3), 岗位(4), 职工号(5)
+    delete_indices = {3, 4, 5}
+
+    # 构建输出映射
+    output_cols = []
+    for c in range(len(col_names)):
+        if c in delete_indices:
+            continue
+        output_cols.append(c)
+
+    return output_cols, delete_indices
+
+
+def _read_payroll_workbook(filepath):
+    """读取工资表文件，返回 (wb_or_ws, is_xls, nrows, ncols, merged_cells, images)"""
+    is_xls = filepath.lower().endswith(".xls")
+    if is_xls:
+        wb = xlrd.open_workbook(filepath)
+        ws = wb.sheet_by_index(0)
+        return (wb, ws, is_xls, ws.nrows, ws.ncols, [], [])
+    else:
+        wb = openpyxl.load_workbook(filepath)
+        ws = wb.active
+        merged = list(ws.merged_cells.ranges) if ws.merged_cells else []
+        # 从 xlsx zip 中直接读取图片文件（openpyxl 的 img.ref 数据被压缩过，不能直接用）
+        images = []
+        if ws._images:
+            import zipfile
+            try:
+                with zipfile.ZipFile(filepath) as z:
+                    for img in ws._images:
+                        try:
+                            png_path = img.path.lstrip('/')
+                            png_data = z.read(png_path)
+                            images.append((png_data, img.anchor._from.row, img.anchor._from.col, img.width, img.height))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        return (wb, ws, is_xls, ws.max_row, ws.max_column, merged, images)
+
+
+def _build_column_name_map(headers):
+    """从表头构建列名→索引映射。
+    Merged cells in row3/row4 produce empty subsequent entries; we track
+    the last non-empty row3 and row4 values to create unique keys.
+    返回 (name_to_idx, col_names):
+    name_to_idx: {规范列名: 0-based索引}
+    col_names: [规范列名, ...] 按原始列顺序
+    """
+    row3 = [str(v or "").strip() for v in headers[2]]
+    row4 = [str(v or "").strip() for v in headers[3]] if len(headers) > 3 else []
+    row5 = [str(v or "").strip() for v in headers[4]] if len(headers) > 4 else []
+
+    name_to_idx = {}
+    col_names = []
+    last_row3 = ""
+    last_row4 = ""
+
+    for c in range(len(row3)):
+        raw = row3[c]
+        if raw and "扣" in raw and "款" in raw:
+            name = "扣款明细"
+        elif raw:
+            name = raw
+        else:
+            name = last_row3
+        if raw:
+            last_row3 = name
+
+        # Propagate row4 only within merged ranges (row3 empty)
+        r4_val = ""
+        if c < len(row4) and row4[c]:
+            r4_val = row4[c]
+            last_row4 = row4[c]
+        elif c < len(row4) and not raw and last_row4:
+            r4_val = last_row4
+        elif c < len(row4) and raw:
+            last_row4 = ""  # Reset when entering a new section
+
+        sub_parts = [r4_val] if r4_val else []
+        if c < len(row5) and row5[c]:
+            sub_parts.append(row5[c])
+        sub_name = "/".join(sub_parts) if sub_parts else ""
+
+        if sub_name:
+            key = f"{name}/{sub_name}" if name != sub_name else name
+        else:
+            key = name
+        name_to_idx[key] = c
+        col_names.append(key)
+
+    return name_to_idx, col_names
+
+
+def _get_canonical_columns(all_file_columns):
+    """从所有文件的列名构建规范列顺序。
+    使用列数最多的文件作为基准（包含所有可选列），其他文件按名称补齐。
+    返回: [规范列名, ...] 不包含 部门/岗位/职工号
+    """
+    # 找到列数最多的文件作为规范基准
+    longest = max(all_file_columns, key=len)
+    canonical = [c for c in longest if c not in ("部门", "岗位", "职工号")]
+    return canonical
+
+
+def _normalize_row_by_names(row, headers, canonical_cols):
+    """根据规范列名将原始行映射为规范行。
+    row: 原始数据行（值列表）
+    headers: 该文件的表头
+    canonical_cols: 规范列名列表
+    返回: [值, ...] 按规范列顺序
+    """
+    name_to_idx, _ = _build_column_name_map(headers)
+    result = []
+    for cname in canonical_cols:
+        if cname in name_to_idx:
+            idx = name_to_idx[cname]
+            if idx < len(row):
+                result.append(row[idx])
+            else:
+                result.append("")
+        else:
+            result.append("")
+    return result
+
+
+def _adjust_merged_range(mrange, delete_1based_set, insert_before_1based=3):
+    """调整合并单元格范围，处理列删除和插入。
+    mrange: openpyxl merged cell range 或 str
+    delete_1based_set: 被删除列的1-based列号集合
+    insert_before_1based: 在1-based列号前插入新列（结算单元，位于姓名后=原C前）
+    返回: 调整后的范围字符串，或 None
+    """
+    import re
+    rng_str = str(mrange)
+    parts = rng_str.split(":")
+    if len(parts) != 2:
+        return None
+
+    from_cell, to_cell = parts[0], parts[1]
+    m1 = re.match(r"([A-Z]+)(\d+)", from_cell)
+    m2 = re.match(r"([A-Z]+)(\d+)", to_cell)
+    if not m1 or not m2:
+        return None
+
+    from_col_str, from_row = m1.group(1), int(m1.group(2))
+    to_col_str, to_row = m2.group(1), int(m2.group(2))
+
+    from_col = sum((ord(c) - 64) * (26 ** i) for i, c in enumerate(reversed(from_col_str)))
+    to_col = sum((ord(c) - 64) * (26 ** i) for i, c in enumerate(reversed(to_col_str)))
+
+    def _mapped_col(col_1based):
+        """Original 1-based → output 1-based, accounting for deletion then insertion."""
+        # Step 1: deletion (3 cols removed at 1-based 4,5,6)
+        deleted_before = sum(1 for d in sorted(delete_1based_set) if d < col_1based)
+        after_delete = col_1based - deleted_before
+        if after_delete <= 0:
+            return None
+        # Step 2: insertion (结算单元 inserted at 1-based column = insert_before_1based)
+        if after_delete >= insert_before_1based:
+            return after_delete + 1
+        else:
+            return after_delete
+
+    new_from = _mapped_col(from_col)
+    new_to = _mapped_col(to_col)
+
+    if new_from is None or new_to is None or new_from > new_to:
+        return None
+
+    def col_to_letter(n):
+        s = ""
+        while n > 0:
+            n, r = divmod(n - 1, 26)
+            s = chr(65 + r) + s
+        return s
+
+    return f"{col_to_letter(new_from)}{from_row}:{col_to_letter(new_to)}{to_row}"
+
+
 def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     """
     合并所有工资表，按个人所得税>0和=0分成两张表
@@ -681,41 +914,48 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     ]
 
     # 去重排序：同一单位优先保留 signed_ 版本，其次 xlsx，最后 xls
-    unit_file_map = {}  # unit_name -> [(priority, fname), ...]
+    unit_file_map = {}
     for fname in payroll_files:
-        # 提取单位名
         unit_name = fname
         for sep in ["2026年06月工资表", "202606工资表", "202606工资"]:
             if sep in fname:
                 unit_name = fname.split(sep, 1)[0].strip()
                 break
         unit_name = unit_name.replace("signed_", "").strip()
-
-        # 优先级：signed_+xlsx(0) > signed_+xls(1) > xlsx(2) > xls(3)
         is_signed = fname.startswith("signed_")
         is_xlsx = fname.endswith(".xlsx")
         priority = 0 if is_signed and is_xlsx else 1 if is_signed else 2 if is_xlsx else 3
-
         if unit_name not in unit_file_map or priority < unit_file_map[unit_name][0]:
             unit_file_map[unit_name] = (priority, fname)
 
-    # 按优先级排序后读取
     sorted_files = sorted(unit_file_map.values(), key=lambda x: x[0])
 
     # 读取所有工资表
-    all_data = []  # [(unit_name, tax_val, data_row), ...]
-    max_cols = 0
-    sample_header = None  # 用第一个文件的表头做基准
+    all_data = []
+    all_file_col_names = []
+    file_name_to_idx_map = {}
+    sample_header = None
+    sample_merged_cells = None
+    sample_images = None
 
     for priority, fname in sorted_files:
         path = os.path.join(payroll_dir, fname)
         headers, data_rows, footers, tax_col = _read_payroll_data(path)
 
+        name_to_idx, col_names = _build_column_name_map(headers)
+        all_file_col_names.append(col_names)
+        file_name_to_idx_map[fname] = name_to_idx
+
         if sample_header is None:
             sample_header = headers
-            max_cols = len(headers[0])
+            if fname.startswith("signed_") and fname.endswith(".xlsx"):
+                try:
+                    _, ws, _, _, _, merged, images = _read_payroll_workbook(path)
+                    sample_merged_cells = merged
+                    sample_images = images
+                except Exception:
+                    pass
 
-        # 提取单位名
         unit_name = fname
         for sep in ["2026年06月工资表", "202606工资表", "202606工资"]:
             if sep in fname:
@@ -723,80 +963,120 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                 break
         unit_name = unit_name.replace("signed_", "").strip()
 
-        # 对齐列数：如果当前文件列数比基准多，扩展基准
-        ncols = len(headers[0])
-        if ncols > max_cols:
-            # 扩展所有已有数据行的列
-            for d in all_data:
-                while len(d[2]) < ncols:
-                    d[2].append("")
-            # 扩展表头
-            for hr in sample_header:
-                while len(hr) < ncols:
-                    hr.append("")
-            max_cols = ncols
-
         for row in data_rows:
-            # 确保行长度一致
-            while len(row) < max_cols:
-                row.append("")
             tax_val = row[tax_col] if tax_col is not None else 0
             try:
                 tax_amt = float(tax_val) if tax_val else 0
             except (ValueError, TypeError):
                 tax_amt = 0
-            all_data.append((unit_name, tax_amt, row))
+            all_data.append((unit_name, tax_amt, row, headers))
 
     if not all_data:
         return None, None, None, None
 
-    # 按个税分组
-    tax_group = [d for d in all_data if d[1] > 0]
-    no_tax_group = [d for d in all_data if d[1] == 0]
+    canonical_cols = _get_canonical_columns(all_file_col_names)
+    canonical_cols = [c for c in canonical_cols if c not in ("部门", "岗位", "职工号")]
 
-    # 构建合并表头
-    # 标题行：吉林大学2026年06月人才派遣人员工资发放表
-    # 单位名称行：单位名称：吉林大学
-    # 原单位名 → 新增"结算单元"列（放在姓名后面）
+    normalized_data = []
+    for unit_name, tax_amt, row, headers in all_data:
+        norm_row = _normalize_row_by_names(row, headers, canonical_cols)
+        normalized_data.append((unit_name, tax_amt, norm_row))
+
+    name_col_in_canonical = None
+    for c, name in enumerate(canonical_cols):
+        if name == "姓名":
+            name_col_in_canonical = c
+            break
+    if name_col_in_canonical is not None:
+        insert_pos = name_col_in_canonical + 1
+        canonical_cols.insert(insert_pos, "结算单元")
+        for i, (uname, tax_amt, nrow) in enumerate(normalized_data):
+            nrow.insert(insert_pos, uname)
+
+    tax_group = [d for d in normalized_data if d[1] > 0]
+    no_tax_group = [d for d in normalized_data if d[1] == 0]
+
+    max_output_cols = len(canonical_cols)
+
     header_rows = []
-    for hr in sample_header:
-        header_rows.append(list(hr))
+    title_row = [""] * max_output_cols
+    title_row[0] = "吉林大学2026年06月人才派遣人员工资发放表"
+    header_rows.append(title_row)
 
-    # 修改标题行
-    title_row = header_rows[0]
-    for c in range(len(title_row)):
-        if str(title_row[c] or "").strip():
-            title_row[c] = "吉林大学2026年06月人才派遣人员工资发放表"
-            break
+    unit_row = [""] * max_output_cols
+    unit_row[0] = "单位"
+    unit_row[1] = "名称：吉林大学"
+    header_rows.append(unit_row)
 
-    # 修改单位名称行
-    unit_row = header_rows[1]
-    for c in range(len(unit_row)):
-        if "名称：" in str(unit_row[c] or ""):
-            unit_row[c] = "名称：吉林大学"
-            break
+    main_row = []
+    sub1_row = []
+    sub2_row = []
+    prev_main = ""
+    prev_sub1 = ""
+    for cname in canonical_cols:
+        if cname == "结算单元":
+            main_row.append("结算单元")
+            sub1_row.append("")
+            sub2_row.append("")
+            prev_main = "结算单元"
+            prev_sub1 = ""
+            continue
+        if "/" in cname:
+            parts = cname.split("/", 1)
+            main_val = parts[0]
+            if main_val == prev_main:
+                main_row.append("")
+            else:
+                main_row.append(main_val)
+                prev_main = main_val
+            sub = parts[1]
+            if "/" in sub:
+                sp = sub.split("/", 1)
+                sub1_val = sp[0]
+                if sub1_val == prev_sub1:
+                    sub1_row.append("")
+                else:
+                    sub1_row.append(sub1_val)
+                    prev_sub1 = sub1_val
+                sub2_row.append(sp[1])
+            else:
+                if sub == prev_sub1:
+                    sub1_row.append("")
+                else:
+                    sub1_row.append(sub)
+                    prev_sub1 = sub
+                sub2_row.append("")
+        else:
+            if cname == prev_main:
+                main_row.append("")
+            else:
+                main_row.append(cname)
+                prev_main = cname
+            sub1_row.append("")
+            sub2_row.append("")
 
-    # 在列名行插入"结算单元"列（姓名列之后，即索引2之后）
-    col_name_row = header_rows[2]
-    # 找到姓名列位置
-    name_col = None
-    for c, v in enumerate(col_name_row):
-        if str(v or "").strip() == "姓名":
-            name_col = c
-            break
-    if name_col is not None:
-        insert_pos = name_col + 1
-        for hr in header_rows:
-            hr.insert(insert_pos, "结算单元" if hr is col_name_row else "")
-        max_cols += 1
-        # 调整所有数据行的结算单元列
-        for d in all_data:
-            row = d[2]
-            while len(row) < insert_pos:
-                row.append("")
-            row.insert(insert_pos, d[0])  # 插入单位名
+    header_rows.append(main_row)
+    if any(v for v in sub1_row):
+        header_rows.append(sub1_row)
+    if any(v for v in sub2_row):
+        header_rows.append(sub2_row)
 
-    # 构建输出文件
+    detail_start = None
+    detail_end = None
+    for c, cname in enumerate(canonical_cols, 1):
+        if cname.startswith("扣款明细"):
+            if detail_start is None:
+                detail_start = c
+            detail_end = c
+    title_end_col = openpyxl.utils.get_column_letter(max_output_cols)
+    detail_start_col = openpyxl.utils.get_column_letter(detail_start) if detail_start else "A"
+    detail_end_col = openpyxl.utils.get_column_letter(detail_end) if detail_end else "A"
+
+    canonical_merged = []
+    canonical_merged.append(f"A1:{title_end_col}1")
+    if detail_start and detail_end and detail_start < detail_end:
+        canonical_merged.append(f"{detail_start_col}3:{detail_end_col}3")
+
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     def write_payroll(group, suffix):
@@ -808,41 +1088,80 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         ws = wb.active
         ws.title = f"工资发放表_{suffix}"
 
-        # 写表头
+        ws.page_setup.orientation = 'landscape'
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.page_margins.left = 1.5
+        ws.page_margins.right = 0.5
+        ws.page_margins.top = 0.75
+        ws.page_margins.bottom = 0.75
+
         for r_idx, row in enumerate(header_rows):
             for c_idx, val in enumerate(row):
-                if val is not None and str(val).strip():
-                    ws.cell(row=r_idx + 1, column=c_idx + 1, value=val)
+                ws.cell(row=r_idx + 1, column=c_idx + 1, value=val)
 
-        # 写数据行（重新编号）
-        for i, (unit_name, tax_amt, row) in enumerate(group, 1):
-            row[0] = i  # 序号
+        for i, (uname, tax_amt, row) in enumerate(group, 1):
+            row[0] = i
             for c_idx, val in enumerate(row):
-                if val is not None and str(val).strip():
-                    ws.cell(row=len(header_rows) + i, column=c_idx + 1, value=val)
+                ws.cell(row=len(header_rows) + i, column=c_idx + 1, value=val)
+                if c_idx >= 6:
+                    try:
+                        float(val)
+                        ws.cell(row=len(header_rows) + i, column=c_idx + 1).number_format = "0.00"
+                    except (ValueError, TypeError):
+                        pass
 
-        # 写合计行
         total_row_idx = len(header_rows) + len(group) + 1
         ws.cell(row=total_row_idx, column=1, value="合计")
-        # 合计数值列累加
-        for c in range(2, max_cols + 1):
-            total = 0
+        for c in range(2, max_output_cols + 1):
+            total = 0.0
             all_num = True
             for _, _, row in group:
+                v = row[c - 1] if c - 1 < len(row) else 0
                 try:
-                    total += float(row[c - 1] or 0)
+                    total += float(v or 0)
                 except (ValueError, TypeError):
                     all_num = False
                     break
             if all_num:
-                ws.cell(row=total_row_idx, column=c, value=total)
+                cell = ws.cell(row=total_row_idx, column=c, value=total)
+                cell.number_format = "0.00"
 
-        # 签字行（只保留一份）
         sign_row_idx = total_row_idx + 2
-        ws.cell(row=sign_row_idx, column=1, value="总经理签字：")
-        ws.cell(row=sign_row_idx, column=7, value="部长签字：")
-        ws.cell(row=sign_row_idx, column=13, value="财务审核：")
-        ws.cell(row=sign_row_idx, column=19, value="制表人：张朦")
+        sign_labels = {
+            1: "总经理签字：",
+            7: "部长签字：",
+            13: "财务审核：",
+            19: "制表人：张朦",
+        }
+        for col, label in sign_labels.items():
+            ws.cell(row=sign_row_idx, column=col, value=label)
+
+        for merge_range in canonical_merged:
+            try:
+                ws.merge_cells(merge_range)
+            except Exception:
+                pass
+
+        if sample_images:
+            from openpyxl.drawing.image import Image as XLImage
+            from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+            import io
+            # Map each image to a signature column (0-based)
+            # sign_labels are at 1-based cols: 1(总经理), 7(部长), 13(财务), 19(制表人)
+            sign_cols_0based = [0, 6, 12, 18]
+            for i, (img_data, orig_row, orig_col, width, height) in enumerate(sample_images[:4]):
+                try:
+                    new_img = XLImage(io.BytesIO(img_data))
+                    new_img.width = width
+                    new_img.height = height
+                    col = sign_cols_0based[i] if i < len(sign_cols_0based) else 0
+                    new_anchor = OneCellAnchor()
+                    new_anchor._from = AnchorMarker(col=col, row=sign_row_idx - 1)
+                    new_img.anchor = new_anchor
+                    ws.add_image(new_img)
+                except Exception:
+                    pass
 
         wb.save(fpath)
         return fpath
@@ -854,9 +1173,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     tax_bank_path = None
     no_tax_bank_path = None
     if bank_dir:
-        # 从银行报盘目录读取，按单位名匹配到分组
         bank_files = [f for f in os.listdir(bank_dir) if f.lower().endswith(".xls")]
-        # 建立单位名→银行报盘文件的映射
         bank_map = {}
         for fname in bank_files:
             try:
@@ -865,7 +1182,6 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             except ValueError:
                 continue
 
-        # 按分组收集银行报盘数据
         def write_bank(group_data, suffix):
             if not group_data:
                 return None
@@ -888,7 +1204,6 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             if not all_bank_rows:
                 return None
 
-            # 重新编号
             for i, row in enumerate(all_bank_rows, 1):
                 row[0] = i
 
