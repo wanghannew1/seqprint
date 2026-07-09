@@ -3,6 +3,7 @@
 """
 
 import os
+import re
 import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
@@ -11,6 +12,22 @@ import openpyxl
 import xlrd
 
 HEADERS = ["序号", "账户", "户名", "金额", "跨行标识", "行名", "联行行号", "摘要", "备注"]
+
+
+def natural_sort_key(s):
+    """
+    自然排序键函数，与 Windows 资源管理器的排序一致。
+    例如：A97 排在 A123 前面（因为 97 < 123）。
+    用法：sorted(files, key=natural_sort_key)
+    """
+    parts = re.split(r"(\d+)", s)
+    result = []
+    for part in parts:
+        if part.isdigit():
+            result.append(int(part))
+        else:
+            result.append(part.lower())
+    return result
 
 
 def split_filename(filename):
@@ -197,7 +214,7 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
         wb.save(merged_path)
         merged_files.append(merged_name)
 
-    return sorted(merged_files)
+    return sorted(merged_files, key=natural_sort_key)
 
 
 def match_payroll_files(merged_files_list, payroll_dir):
@@ -563,8 +580,8 @@ class BatchPrintGUI:
             return
 
         # 步骤 4：打印（需要用户确认）
-        # 按合并文件名升序排列，与 Windows 资源管理器排序一致
-        matched.sort(key=lambda x: x[0])
+        # 按合并文件名自然排序，与 Windows 资源管理器排序一致
+        matched.sort(key=lambda x: natural_sort_key(x[0]))
         self.log("")
         self.log("【步骤4】准备打印...")
 
@@ -650,8 +667,8 @@ class BatchPrintGUI:
         self.log("【步骤3】匹配工资表文件...")
         try:
             matched = match_payroll_files(merged, self.payroll_dir)
-            # 按合并文件名升序排列
-            matched.sort(key=lambda x: x[0])
+            # 按合并文件名自然排序，与 Windows 资源管理器排序一致
+            matched.sort(key=lambda x: natural_sort_key(x[0]))
             matched_count = sum(1 for _, fp, _ in matched if fp is not None)
             self.log(f"  ✓ 匹配完成：{matched_count}/{len(matched)} 匹配成功")
             for merged_name, payroll_path, unit_name in matched:
