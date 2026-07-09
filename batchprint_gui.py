@@ -570,6 +570,336 @@ def generate_report_xlsx(output_dir, renamed, matched, unmatched, duplicates,
 
 
 # ──────────────────────────────────────────────
+# 工资表合并（按个税分组）
+# ──────────────────────────────────────────────
+
+
+def _read_payroll_data(filepath):
+    """读取工资表文件，返回 (header_rows, data_rows, footer_rows, tax_col_idx)
+    header_rows: 表头行列表（每行是单元格值列表）
+    data_rows: 数据行列表（每行是单元格值列表）
+    footer_rows: 表尾行列表（备注行、签字行等）
+    tax_col_idx: 个人所得税列索引（0-based）
+    """
+    is_xls = filepath.lower().endswith(".xls")
+    if is_xls:
+        wb = xlrd.open_workbook(filepath)
+        ws = wb.sheet_by_index(0)
+        nrows, ncols = ws.nrows, ws.ncols
+    else:
+        wb = openpyxl.load_workbook(filepath)
+        ws = wb.active
+        nrows, ncols = ws.max_row, ws.max_column
+
+    # 找个人所得税列
+    tax_col = None
+    for c in range(ncols):
+        if is_xls:
+            val = str(ws.cell_value(2, c)).strip()
+        else:
+            val = str(ws.cell(row=3, column=c + 1).value or "").strip()
+        if "个人所得" in val or "个税" in val:
+            tax_col = c
+            break
+
+    # 读取所有行
+    all_rows = []
+    for r in range(nrows):
+        row = []
+        for c in range(ncols):
+            if is_xls:
+                row.append(ws.cell_value(r, c))
+            else:
+                row.append(ws.cell(row=r + 1, column=c + 1).value)
+        all_rows.append(row)
+
+    # 分离表头、数据、表尾
+    # 表头：行0-4（标题行、单位行、列名行、扣款子行1、扣款子行2）
+    # 数据行：有序号（第1列是数字）且姓名列有值且不是"合计"的行
+    # 表尾：其余行（备注行、签字行、空行）
+    header_rows = all_rows[:5]
+    data_rows = []
+    footer_rows = []
+    for row in all_rows[5:]:
+        seq = str(row[0]).strip() if len(row) > 0 else ""
+        name = str(row[1]).strip() if len(row) > 1 else ""
+        # 数据行特征：序号是数字，姓名有值且不是合计/转账等汇总行
+        is_data = False
+        try:
+            float(seq)  # 序号是数字
+            if name and name not in ("合计", "转账合计"):
+                is_data = True
+        except (ValueError, TypeError):
+            pass
+        if is_data:
+            data_rows.append(row)
+        else:
+            footer_rows.append(row)
+
+    return header_rows, data_rows, footer_rows, tax_col
+
+
+def _get_common_columns(all_headers):
+    """从所有表头中找出共同列和独有列
+    返回: (common_cols, unique_cols_map)
+    common_cols: [(idx, name), ...] 所有文件都有的列
+    unique_cols_map: {filename: [(idx, name), ...]} 每个文件独有的列
+    """
+    # 取第一个文件的列名作为基准
+    base = all_headers[0][2]  # 第3行是列名行
+    base_names = [str(v)[:20] for v in base]
+
+    common = list(range(len(base_names)))
+    unique_map = {}
+
+    for i, headers in enumerate(all_headers[1:], 1):
+        names = [str(v)[:20] for v in headers[2]]
+        # 找当前文件比基准多的列
+        extra = []
+        for c, name in enumerate(names):
+            if name and name not in base_names:
+                extra.append((c, name))
+        if extra:
+            unique_map[i] = extra
+
+    return [(i, base_names[i]) for i in range(len(base_names))], unique_map
+
+
+def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
+    """
+    合并所有工资表，按个人所得税>0和=0分成两张表
+    同时按分组生成对应的银行报盘文件
+    返回: (tax_path, no_tax_path, tax_bank_path, no_tax_bank_path)
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 扫描工资表
+    payroll_files = sorted([
+        f for f in os.listdir(payroll_dir)
+        if "汇总表" not in f and "验证" not in f
+        and f.endswith((".xlsx", ".xls"))
+    ])
+
+    # 读取所有工资表
+    all_data = []  # [(unit_name, tax_val, data_row), ...]
+    max_cols = 0
+    sample_header = None  # 用第一个文件的表头做基准
+    seen_units = set()  # 去重：同一单位只取第一个文件（优先 signed_）
+
+    for fname in payroll_files:
+        path = os.path.join(payroll_dir, fname)
+        headers, data_rows, footers, tax_col = _read_payroll_data(path)
+
+        if sample_header is None:
+            sample_header = headers
+            max_cols = len(headers[0])
+
+        # 提取单位名
+        unit_name = fname
+        for sep in ["2026年06月工资表", "202606工资表", "202606工资"]:
+            if sep in fname:
+                unit_name = fname.split(sep, 1)[0].strip()
+                break
+        # 去掉 signed_ 前缀
+        unit_name = unit_name.replace("signed_", "").strip()
+
+        # 去重：同一单位有 .xls 和 .xlsx 时只取第一个
+        if unit_name in seen_units:
+            continue
+        seen_units.add(unit_name)
+
+        # 对齐列数：如果当前文件列数比基准多，扩展基准
+        ncols = len(headers[0])
+        if ncols > max_cols:
+            # 扩展所有已有数据行的列
+            for d in all_data:
+                while len(d[2]) < ncols:
+                    d[2].append("")
+            # 扩展表头
+            for hr in sample_header:
+                while len(hr) < ncols:
+                    hr.append("")
+            max_cols = ncols
+
+        for row in data_rows:
+            # 确保行长度一致
+            while len(row) < max_cols:
+                row.append("")
+            tax_val = row[tax_col] if tax_col is not None else 0
+            try:
+                tax_amt = float(tax_val) if tax_val else 0
+            except (ValueError, TypeError):
+                tax_amt = 0
+            all_data.append((unit_name, tax_amt, row))
+
+    if not all_data:
+        return None, None, None, None
+
+    # 按个税分组
+    tax_group = [d for d in all_data if d[1] > 0]
+    no_tax_group = [d for d in all_data if d[1] == 0]
+
+    # 构建合并表头
+    # 标题行：吉林大学2026年06月人才派遣人员工资发放表
+    # 单位名称行：单位名称：吉林大学
+    # 原单位名 → 新增"结算单元"列（放在姓名后面）
+    header_rows = []
+    for hr in sample_header:
+        header_rows.append(list(hr))
+
+    # 修改标题行
+    title_row = header_rows[0]
+    for c in range(len(title_row)):
+        if str(title_row[c] or "").strip():
+            title_row[c] = "吉林大学2026年06月人才派遣人员工资发放表"
+            break
+
+    # 修改单位名称行
+    unit_row = header_rows[1]
+    for c in range(len(unit_row)):
+        if "名称：" in str(unit_row[c] or ""):
+            unit_row[c] = "名称：吉林大学"
+            break
+
+    # 在列名行插入"结算单元"列（姓名列之后，即索引2之后）
+    col_name_row = header_rows[2]
+    # 找到姓名列位置
+    name_col = None
+    for c, v in enumerate(col_name_row):
+        if str(v or "").strip() == "姓名":
+            name_col = c
+            break
+    if name_col is not None:
+        insert_pos = name_col + 1
+        for hr in header_rows:
+            hr.insert(insert_pos, "结算单元" if hr is col_name_row else "")
+        max_cols += 1
+        # 调整所有数据行的结算单元列
+        for d in all_data:
+            row = d[2]
+            while len(row) < insert_pos:
+                row.append("")
+            row.insert(insert_pos, d[0])  # 插入单位名
+
+    # 构建输出文件
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    def write_payroll(group, suffix):
+        if not group:
+            return None
+        fname = f"吉林大学2026年06月人才派遣人员工资发放表_{suffix}.xlsx"
+        fpath = os.path.join(output_dir, fname)
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = f"工资发放表_{suffix}"
+
+        # 写表头
+        for r_idx, row in enumerate(header_rows):
+            for c_idx, val in enumerate(row):
+                if val is not None and str(val).strip():
+                    ws.cell(row=r_idx + 1, column=c_idx + 1, value=val)
+
+        # 写数据行（重新编号）
+        for i, (unit_name, tax_amt, row) in enumerate(group, 1):
+            row[0] = i  # 序号
+            for c_idx, val in enumerate(row):
+                if val is not None and str(val).strip():
+                    ws.cell(row=len(header_rows) + i, column=c_idx + 1, value=val)
+
+        # 写合计行
+        total_row_idx = len(header_rows) + len(group) + 1
+        ws.cell(row=total_row_idx, column=1, value="合计")
+        # 合计数值列累加
+        for c in range(2, max_cols + 1):
+            total = 0
+            all_num = True
+            for _, _, row in group:
+                try:
+                    total += float(row[c - 1] or 0)
+                except (ValueError, TypeError):
+                    all_num = False
+                    break
+            if all_num:
+                ws.cell(row=total_row_idx, column=c, value=total)
+
+        # 签字行（只保留一份）
+        sign_row_idx = total_row_idx + 2
+        ws.cell(row=sign_row_idx, column=1, value="总经理签字：")
+        ws.cell(row=sign_row_idx, column=7, value="部长签字：")
+        ws.cell(row=sign_row_idx, column=13, value="财务审核：")
+        ws.cell(row=sign_row_idx, column=19, value="制表人：张朦")
+
+        wb.save(fpath)
+        return fpath
+
+    tax_path = write_payroll(tax_group, "有个税")
+    no_tax_path = write_payroll(no_tax_group, "无个税")
+
+    # 生成对应的银行报盘文件
+    tax_bank_path = None
+    no_tax_bank_path = None
+    if bank_dir:
+        # 从银行报盘目录读取，按单位名匹配到分组
+        bank_files = [f for f in os.listdir(bank_dir) if f.lower().endswith(".xls")]
+        # 建立单位名→银行报盘文件的映射
+        bank_map = {}
+        for fname in bank_files:
+            try:
+                _, _, unit_name = split_filename(fname)
+                bank_map[unit_name] = fname
+            except ValueError:
+                continue
+
+        # 按分组收集银行报盘数据
+        def write_bank(group_data, suffix):
+            if not group_data:
+                return None
+            all_bank_rows = []
+            seen_units = set()
+            for unit_name, _, _ in group_data:
+                if unit_name in bank_map and unit_name not in seen_units:
+                    seen_units.add(unit_name)
+                    fname = bank_map[unit_name]
+                    fpath = os.path.join(bank_dir, fname)
+                    bt = detect_bank_type(fname)
+                    if bt == "icbc":
+                        rows = _read_icbc_rows(fpath, [])
+                    elif bt == "ccb":
+                        rows = _read_ccb_rows(fpath, [])
+                    elif bt == "jlb":
+                        rows = _read_jlb_rows(fpath, [])
+                    all_bank_rows.extend(rows)
+
+            if not all_bank_rows:
+                return None
+
+            # 重新编号
+            for i, row in enumerate(all_bank_rows, 1):
+                row[0] = i
+
+            fname = f"银行报盘_{suffix}_{ts}.xlsx"
+            fpath = os.path.join(output_dir, fname)
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = f"银行报盘_{suffix}"
+            ws.append(HEADERS)
+            for row_idx, row in enumerate(all_bank_rows, start=2):
+                for c, val in enumerate(row, start=1):
+                    if val is None or val == "":
+                        continue
+                    cell = ws.cell(row=row_idx, column=c, value=val)
+                    if c == 4:
+                        cell.number_format = "0.00"
+            wb.save(fpath)
+            return fpath
+
+        tax_bank_path = write_bank(tax_group, "有个税")
+        no_tax_bank_path = write_bank(no_tax_group, "无个税")
+
+    return tax_path, no_tax_path, tax_bank_path, no_tax_bank_path
+
+
+# ──────────────────────────────────────────────
 # GUI 界面
 # ──────────────────────────────────────────────
 
@@ -657,6 +987,34 @@ class BatchPrintGUI:
         )
         self.merge_only_btn.pack(side=tk.LEFT)
 
+        # ── 新功能：合并工资表及报盘 ──
+        sep2 = tk.Frame(btn_frame, width=2, bd=1, relief=tk.SUNKEN, height=30)
+        sep2.pack(side=tk.LEFT, padx=10)
+
+        self.merge_payroll_btn = tk.Button(
+            btn_frame,
+            text="合并工资表及报盘并打印",
+            command=self.run_merge_payroll_and_print,
+            bg="#e67e22",
+            fg="white",
+            font=("微软雅黑", 11, "bold"),
+            padx=16,
+            pady=4,
+        )
+        self.merge_payroll_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.merge_payroll_no_print_btn = tk.Button(
+            btn_frame,
+            text="合并工资表及报盘不打印",
+            command=self.run_merge_payroll_only,
+            bg="#9b59b6",
+            fg="white",
+            font=("微软雅黑", 11, "bold"),
+            padx=16,
+            pady=4,
+        )
+        self.merge_payroll_no_print_btn.pack(side=tk.LEFT)
+
         # 分隔线
         sep = tk.Frame(self.root, height=2, bd=1, relief=tk.SUNKEN)
         sep.pack(fill=tk.X, padx=10, pady=6)
@@ -726,6 +1084,8 @@ class BatchPrintGUI:
         state = tk.DISABLED if busy else tk.NORMAL
         self.run_all_btn.config(state=state)
         self.merge_only_btn.config(state=state)
+        self.merge_payroll_btn.config(state=state)
+        self.merge_payroll_no_print_btn.config(state=state)
         self.root.update_idletasks()
 
     # ── 执行全部并打印 ──────────────────────────────
@@ -926,6 +1286,107 @@ class BatchPrintGUI:
         except Exception as e:
             self.log(f"  ✗ 操作记录生成失败：{e}")
 
+        self.log("=" * 50)
+        self._set_busy(False)
+
+    # ── 合并工资表及报盘并打印 ──────────────────────────────
+
+    def run_merge_payroll_and_print(self):
+        if not self._check_dirs():
+            return
+
+        self._set_busy(True)
+        self.log("=" * 50)
+        self.log("开始合并工资表及报盘（按个税分组）...")
+        self.log("")
+
+        try:
+            tax_path, no_tax_path, tax_bank_path, no_tax_bank_path = merge_payrolls_by_tax(
+                self.payroll_dir, self.output_dir, self.bank_dir
+            )
+        except Exception as e:
+            self.log(f"  ✗ 合并失败：{e}")
+            import traceback
+            self.log(traceback.format_exc())
+            self._set_busy(False)
+            return
+
+        if tax_path:
+            self.log(f"  ✓ 有个税工资表：{os.path.basename(tax_path)}")
+        if no_tax_path:
+            self.log(f"  ✓ 无个税工资表：{os.path.basename(no_tax_path)}")
+        if tax_bank_path:
+            self.log(f"  ✓ 有个税银行报盘：{os.path.basename(tax_bank_path)}")
+        if no_tax_bank_path:
+            self.log(f"  ✓ 无个税银行报盘：{os.path.basename(no_tax_bank_path)}")
+
+        # 打印
+        self.log("")
+        self.log("准备打印...")
+        if not check_wps_available():
+            self.log("  ✗ WPS Office 不可用，无法打印")
+            self._set_busy(False)
+            return
+
+        to_print = []
+        if tax_path:
+            to_print.append(("", tax_path, "有个税工资表"))
+        if no_tax_path:
+            to_print.append(("", no_tax_path, "无个税工资表"))
+
+        self.log("以下文件将打印：")
+        for _, fp, label in to_print:
+            self.log(f"  • {label} → {os.path.basename(fp)}")
+
+        ok = messagebox.askyesno("确认打印", f"将打印 {len(to_print)} 张工资表，是否继续？")
+        if not ok:
+            self.log("  用户取消打印")
+            self._set_busy(False)
+            return
+
+        def progress_cb(current, total, message):
+            self.log(f"  [{current}/{total}] {message}")
+            self.root.update()
+
+        success, fail, fail_list = batch_print(to_print, progress_cb)
+        self.log(f"打印完成：成功 {success}，失败 {fail}")
+
+        self.log("=" * 50)
+        self._set_busy(False)
+
+    # ── 合并工资表及报盘不打印 ──────────────────────────────
+
+    def run_merge_payroll_only(self):
+        if not self._check_dirs():
+            return
+
+        self._set_busy(True)
+        self.log("=" * 50)
+        self.log("开始合并工资表及报盘（按个税分组，不打印）...")
+        self.log("")
+
+        try:
+            tax_path, no_tax_path, tax_bank_path, no_tax_bank_path = merge_payrolls_by_tax(
+                self.payroll_dir, self.output_dir, self.bank_dir
+            )
+        except Exception as e:
+            self.log(f"  ✗ 合并失败：{e}")
+            import traceback
+            self.log(traceback.format_exc())
+            self._set_busy(False)
+            return
+
+        if tax_path:
+            self.log(f"  ✓ 有个税工资表：{os.path.basename(tax_path)}")
+        if no_tax_path:
+            self.log(f"  ✓ 无个税工资表：{os.path.basename(no_tax_path)}")
+        if tax_bank_path:
+            self.log(f"  ✓ 有个税银行报盘：{os.path.basename(tax_bank_path)}")
+        if no_tax_bank_path:
+            self.log(f"  ✓ 无个税银行报盘：{os.path.basename(no_tax_bank_path)}")
+
+        self.log("")
+        self.log("合并完成，未执行打印。")
         self.log("=" * 50)
         self._set_busy(False)
 
