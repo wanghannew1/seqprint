@@ -5,6 +5,7 @@
 import os
 import shutil
 import tkinter as tk
+from datetime import datetime
 from tkinter import filedialog, messagebox, scrolledtext
 
 import openpyxl
@@ -497,11 +498,21 @@ class BatchPrintGUI:
 
     # ── 目录选择 ──────────────────────────────
 
+    def _set_default_output_dir(self):
+        """根据银行报盘目录自动设置输出目录"""
+        if not self.bank_dir:
+            return
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_dir = os.path.join(self.bank_dir, f"合并后的银行报盘_{ts}")
+        self.output_dir = default_dir
+        self.output_dir_label.config(text=f"输出目录：{default_dir}")
+
     def select_bank_dir(self):
         d = filedialog.askdirectory(title="选择银行报盘目录")
         if d:
             self.bank_dir = d
             self.bank_dir_label.config(text=f"银行报盘目录：{d}")
+            self._set_default_output_dir()
 
     def select_payroll_dir(self):
         d = filedialog.askdirectory(title="选择工资表目录")
