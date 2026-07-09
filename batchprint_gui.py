@@ -6,6 +6,7 @@ import os
 import shutil
 import tkinter as tk
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from tkinter import filedialog, messagebox, scrolledtext
 
 import openpyxl
@@ -69,14 +70,14 @@ def rename_bank_files(bank_dir, output_dir):
     return result
 
 
-def _to_number(val):
-    """将 xlrd 读取的值转为数字（金额列用），文本也转成 float"""
-    if isinstance(val, (int, float)):
-        return float(val)
+def _to_decimal(val):
+    """将 xlrd 读取的值转为 Decimal（两位小数，四舍五入），避免 float 精度问题"""
     try:
-        return float(str(val).replace(",", "").strip())
-    except (ValueError, TypeError):
-        return 0.0
+        if isinstance(val, str):
+            val = val.replace(",", "").strip()
+        return Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except Exception:
+        return Decimal("0.00")
 
 
 def _read_icbc_rows(filepath):
@@ -88,7 +89,7 @@ def _read_icbc_rows(filepath):
         seq = len(rows) + 1
         account = str(ws.cell_value(r, 0)).strip()
         name = str(ws.cell_value(r, 1)).strip()
-        amount = _to_number(ws.cell_value(r, 2))
+        amount = _to_decimal(ws.cell_value(r, 2))
         rows.append([seq, account, name, amount, "1", "工商银行", "", "", ""])
     return rows
 
@@ -105,7 +106,7 @@ def _read_ccb_rows(filepath):
             val = ws.cell_value(r, c)
             # 金额列（索引3）转数字
             if c == 3:
-                val = _to_number(val)
+                val = _to_decimal(val)
             row.append(val)
         # 序号重新生成
         row[0] = seq
@@ -128,7 +129,7 @@ def _read_jlb_rows(filepath):
             val = ws.cell_value(r, c)
             # 金额列（索引3）转数字
             if c == 3:
-                val = _to_number(val)
+                val = _to_decimal(val)
             row.append(val)
         # 序号重新生成
         row[0] = seq
@@ -208,11 +209,14 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
         for bank_name, count in bank_summary:
             parts.append(f"{bank_name}{count}个")
 
-        # 计算总计金额（元角分）
+        # 计算总计金额（元角分，Decimal 精确计算）
         total_fen = 0
         for row in all_rows:
-            amt = float(row[3])
-            total_fen += int(round(amt * 100))
+            amt = row[3]
+            if isinstance(amt, Decimal):
+                total_fen += int(amt * 100)
+            else:
+                total_fen += int(round(float(amt) * 100))
         yuan = total_fen // 100
         jiao = (total_fen % 100) // 10
         fen = total_fen % 10
