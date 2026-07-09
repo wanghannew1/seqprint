@@ -15,12 +15,27 @@
 
 ## 安装步骤
 
+### 方式一：使用 uv（推荐）
+
 1. 安装 uv（如未安装）：
    ```powershell
    powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
 
-2. 双击 `run_batch_print.ps1` 启动程序，脚本会自动安装依赖并运行。
+2. 双击 `run_batch_print.ps1` 启动，脚本会自动安装依赖并运行。
+   （pyproject.toml 已配置清华镜像源，下载速度更快）
+
+### 方式二：使用 pip
+
+```powershell
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+python batchprint_gui.py
+```
+
+### 已验证环境
+- Python 3.13 + uv（清华镜像）：✅ 通过
+- 依赖：xlrd, openpyxl, pandas, pywin32
+- pywin32 仅在 Windows 下自动安装
 
 ## 使用说明
 
@@ -31,6 +46,8 @@
 
 ## 注意事项
 
+- 首次运行 `uv sync` 会自动创建虚拟环境并安装依赖
+- 如遇网络慢，pyproject.toml 已默认配置清华镜像
 - 程序不会修改原始文件，所有操作均在副本上进行
 - 仅支持以下银行格式：
   - 中国建设银行
