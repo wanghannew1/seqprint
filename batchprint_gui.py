@@ -674,19 +674,40 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     os.makedirs(output_dir, exist_ok=True)
 
     # 扫描工资表
-    payroll_files = sorted([
+    payroll_files = [
         f for f in os.listdir(payroll_dir)
         if "汇总表" not in f and "验证" not in f
         and f.endswith((".xlsx", ".xls"))
-    ])
+    ]
+
+    # 去重排序：同一单位优先保留 signed_ 版本，其次 xlsx，最后 xls
+    unit_file_map = {}  # unit_name -> [(priority, fname), ...]
+    for fname in payroll_files:
+        # 提取单位名
+        unit_name = fname
+        for sep in ["2026年06月工资表", "202606工资表", "202606工资"]:
+            if sep in fname:
+                unit_name = fname.split(sep, 1)[0].strip()
+                break
+        unit_name = unit_name.replace("signed_", "").strip()
+
+        # 优先级：signed_+xlsx(0) > signed_+xls(1) > xlsx(2) > xls(3)
+        is_signed = fname.startswith("signed_")
+        is_xlsx = fname.endswith(".xlsx")
+        priority = 0 if is_signed and is_xlsx else 1 if is_signed else 2 if is_xlsx else 3
+
+        if unit_name not in unit_file_map or priority < unit_file_map[unit_name][0]:
+            unit_file_map[unit_name] = (priority, fname)
+
+    # 按优先级排序后读取
+    sorted_files = sorted(unit_file_map.values(), key=lambda x: x[0])
 
     # 读取所有工资表
     all_data = []  # [(unit_name, tax_val, data_row), ...]
     max_cols = 0
     sample_header = None  # 用第一个文件的表头做基准
-    seen_units = set()  # 去重：同一单位只取第一个文件（优先 signed_）
 
-    for fname in payroll_files:
+    for priority, fname in sorted_files:
         path = os.path.join(payroll_dir, fname)
         headers, data_rows, footers, tax_col = _read_payroll_data(path)
 
@@ -700,13 +721,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             if sep in fname:
                 unit_name = fname.split(sep, 1)[0].strip()
                 break
-        # 去掉 signed_ 前缀
         unit_name = unit_name.replace("signed_", "").strip()
-
-        # 去重：同一单位有 .xls 和 .xlsx 时只取第一个
-        if unit_name in seen_units:
-            continue
-        seen_units.add(unit_name)
 
         # 对齐列数：如果当前文件列数比基准多，扩展基准
         ncols = len(headers[0])
