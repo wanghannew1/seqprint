@@ -189,7 +189,7 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
         seq_prefix = str(idx).zfill(pad_width)
         parts = [f"{seq_prefix}_{unit_name}", yearmon]
         for bank_name, count in bank_summary:
-            parts.append(f"{bank_name}{count}")
+            parts.append(f"{bank_name}{count}个")
 
         # 计算总计金额（元角分）
         total_fen = 0
