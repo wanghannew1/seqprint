@@ -436,30 +436,9 @@ class BatchPrintGUI:
         dir_frame.columnconfigure(1, weight=1)
         dir_frame.columnconfigure(2, weight=1)
 
-        # 分隔线
-        sep = tk.Frame(self.root, height=2, bd=1, relief=tk.SUNKEN)
-        sep.pack(fill=tk.X, padx=10, pady=6)
-
-        # ── 日志区域 ──
-        log_frame = tk.Frame(self.root, padx=12)
-        log_frame.pack(fill=tk.BOTH, expand=True)
-
-        tk.Label(log_frame, text="日志信息", font=("微软雅黑", 10, "bold"), anchor=tk.W).pack(
-            fill=tk.X, pady=(0, 4)
-        )
-
-        self.log_area = scrolledtext.ScrolledText(
-            log_frame,
-            wrap=tk.WORD,
-            font=("Consolas", 10),
-            bg="#fafafa",
-            state=tk.DISABLED,
-        )
-        self.log_area.pack(fill=tk.BOTH, expand=True)
-
-        # ── 按钮区域（固定在底部） ──
+        # ── 按钮区域（目录选择和日志之间） ──
         btn_frame = tk.Frame(self.root, padx=12, pady=10)
-        btn_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        btn_frame.pack(fill=tk.X, pady=(4, 0))
 
         self.run_all_btn = tk.Button(
             btn_frame,
@@ -484,6 +463,27 @@ class BatchPrintGUI:
             pady=4,
         )
         self.merge_only_btn.pack(side=tk.LEFT)
+
+        # 分隔线
+        sep = tk.Frame(self.root, height=2, bd=1, relief=tk.SUNKEN)
+        sep.pack(fill=tk.X, padx=10, pady=6)
+
+        # ── 日志区域 ──
+        log_frame = tk.Frame(self.root, padx=12)
+        log_frame.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(log_frame, text="日志信息", font=("微软雅黑", 10, "bold"), anchor=tk.W).pack(
+            fill=tk.X, pady=(0, 4)
+        )
+
+        self.log_area = scrolledtext.ScrolledText(
+            log_frame,
+            wrap=tk.WORD,
+            font=("Consolas", 10),
+            bg="#fafafa",
+            state=tk.DISABLED,
+        )
+        self.log_area.pack(fill=tk.BOTH, expand=True)
 
     # ── 日志 ──────────────────────────────
 
