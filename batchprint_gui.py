@@ -174,9 +174,9 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
                     bank_rows.extend(_read_ccb_rows(filepath))
                 elif bt == "jlb":
                     bank_rows.extend(_read_jlb_rows(filepath))
-            # 重新编号
+            # 重新编号（跨银行连续递增）
             for i, row in enumerate(bank_rows):
-                row[0] = i + 1
+                row[0] = len(all_rows) + i + 1
             all_rows.extend(bank_rows)
             bank_summary.append((bank_name, len(bank_rows)))
 
@@ -563,6 +563,8 @@ class BatchPrintGUI:
             return
 
         # 步骤 4：打印（需要用户确认）
+        # 按合并文件名升序排列，与 Windows 资源管理器排序一致
+        matched.sort(key=lambda x: x[0])
         self.log("")
         self.log("【步骤4】准备打印...")
 
@@ -648,6 +650,8 @@ class BatchPrintGUI:
         self.log("【步骤3】匹配工资表文件...")
         try:
             matched = match_payroll_files(merged, self.payroll_dir)
+            # 按合并文件名升序排列
+            matched.sort(key=lambda x: x[0])
             matched_count = sum(1 for _, fp, _ in matched if fp is not None)
             self.log(f"  ✓ 匹配完成：{matched_count}/{len(matched)} 匹配成功")
             for merged_name, payroll_path, unit_name in matched:
