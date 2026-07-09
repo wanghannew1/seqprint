@@ -403,10 +403,11 @@ def batch_print(matched_pairs, progress_callback=None):
     return (success_count, fail_count, fail_list)
 
 
-def generate_report_xlsx(output_dir, renamed_count, matched, unmatched, duplicates,
+def generate_report_xlsx(output_dir, renamed, matched, unmatched, duplicates,
                          success=None, fail=None, fail_list=None):
     """
     生成合并打印操作记录 xlsx
+    renamed: [(new_name, old_name, bank_name, unit_name), ...]
     matched: [(merged_filename, payroll_filepath, unit_name), ...]
     unmatched: [payroll_filename, ...]
     duplicates: {unit_name: [filenames, ...], ...}
@@ -422,13 +423,13 @@ def generate_report_xlsx(output_dir, renamed_count, matched, unmatched, duplicat
 
     # ── 标题行 ──
     ws.cell(row=1, column=1, value="合并打印操作记录")
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=9)
     ws.cell(row=1, column=1).font = openpyxl.styles.Font(bold=True, size=14)
 
     # ── 汇总信息 ──
     row = 3
     ws.cell(row=row, column=1, value="银行报盘文件数")
-    ws.cell(row=row, column=2, value=renamed_count)
+    ws.cell(row=row, column=2, value=len(renamed))
     row += 1
     ws.cell(row=row, column=1, value="合并文件数")
     ws.cell(row=row, column=2, value=len(matched))
@@ -446,9 +447,14 @@ def generate_report_xlsx(output_dir, renamed_count, matched, unmatched, duplicat
     ws.cell(row=row, column=1, value="存在多个工资表的单位数")
     ws.cell(row=row, column=2, value=len(duplicates))
 
+    # 建立原始报盘文件查找表：unit_name -> [old_name, ...]
+    orig_files = {}
+    for new_name, old_name, bank_name, unit_name in renamed:
+        orig_files.setdefault(unit_name, []).append(old_name)
+
     # ── 明细表头 ──
     row += 2
-    headers = ["序号", "单位名称", "合并文件", "工资表文件", "匹配状态", "打印状态", "备注"]
+    headers = ["序号", "单位名称", "合并文件", "原始报盘文件", "工资表文件", "匹配状态", "打印状态", "备注"]
     for ci, h in enumerate(headers, 1):
         cell = ws.cell(row=row, column=ci, value=h)
         cell.font = openpyxl.styles.Font(bold=True)
@@ -481,14 +487,17 @@ def generate_report_xlsx(output_dir, renamed_count, matched, unmatched, duplicat
         ws.cell(row=row, column=1, value=idx)
         ws.cell(row=row, column=2, value=unit_name)
         ws.cell(row=row, column=3, value=merged_name)
-        ws.cell(row=row, column=4, value=os.path.basename(payroll_path) if payroll_path else "")
-        ws.cell(row=row, column=5, value="已匹配" if payroll_path else "未找到")
-        ws.cell(row=row, column=6, value=print_status.get(unit_name, ""))
+        # 原始报盘文件
+        orig_list = orig_files.get(unit_name, [])
+        ws.cell(row=row, column=4, value="\n".join(orig_list))
+        ws.cell(row=row, column=5, value=os.path.basename(payroll_path) if payroll_path else "")
+        ws.cell(row=row, column=6, value="已匹配" if payroll_path else "未找到")
+        ws.cell(row=row, column=7, value=print_status.get(unit_name, ""))
         # 备注：重复文件提示
         note = ""
         if unit_name in duplicates:
             note = f"存在多个工资表文件，仅使用 {os.path.basename(payroll_path) if payroll_path else '第一个'}"
-        ws.cell(row=row, column=7, value=note)
+        ws.cell(row=row, column=8, value=note)
 
     # ── 未匹配工资表 ──
     if unmatched:
@@ -503,10 +512,11 @@ def generate_report_xlsx(output_dir, renamed_count, matched, unmatched, duplicat
     ws.column_dimensions["A"].width = 8
     ws.column_dimensions["B"].width = 30
     ws.column_dimensions["C"].width = 50
-    ws.column_dimensions["D"].width = 40
-    ws.column_dimensions["E"].width = 12
+    ws.column_dimensions["D"].width = 45
+    ws.column_dimensions["E"].width = 40
     ws.column_dimensions["F"].width = 12
-    ws.column_dimensions["G"].width = 45
+    ws.column_dimensions["G"].width = 12
+    ws.column_dimensions["H"].width = 45
 
     wb.save(report_path)
     return report_path
@@ -779,7 +789,7 @@ class BatchPrintGUI:
         # 生成操作记录
         try:
             report_path = generate_report_xlsx(
-                self.output_dir, len(renamed), matched,
+                self.output_dir, renamed, matched,
                 unmatched, duplicates, success, fail, fail_list
             )
             self.log(f"  📄 操作记录已保存：{report_path}")
@@ -852,7 +862,7 @@ class BatchPrintGUI:
         # 生成操作记录
         try:
             report_path = generate_report_xlsx(
-                self.output_dir, len(renamed), matched, unmatched, duplicates
+                self.output_dir, renamed, matched, unmatched, duplicates
             )
             self.log(f"  📄 操作记录已保存：{report_path}")
         except Exception as e:
