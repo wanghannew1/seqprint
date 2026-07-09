@@ -238,13 +238,18 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
         merged_name = "-".join(parts) + f"-总计{yuan}元{jiao}角{fen}分.xlsx"
         merged_path = os.path.join(output_dir, merged_name)
 
-        # 写入
+        # 写入（建行系统兼容：空值列不写入单元格，金额列设小数格式）
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = unit_name
         ws.append(HEADERS)
-        for row in all_rows:
-            ws.append(row)
+        for row_idx, row in enumerate(all_rows, start=2):
+            for c, val in enumerate(row, start=1):
+                if val is None or val == "":
+                    continue  # 跳过空值，建行系统不接受空 inlineStr 单元格
+                cell = ws.cell(row=row_idx, column=c, value=val)
+                if c == 4:  # 金额列设两位小数格式
+                    cell.number_format = "0.00"
         wb.save(merged_path)
         merged_files.append(merged_name)
 
