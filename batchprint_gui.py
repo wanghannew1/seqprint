@@ -71,16 +71,21 @@ def rename_bank_files(bank_dir, output_dir):
 
 
 def _to_decimal(val):
-    """将 xlrd 读取的值转为 Decimal（两位小数，四舍五入），避免 float 精度问题"""
+    """将 xlrd 读取的值转为 Decimal（两位小数，分以下直接舍去），避免 float 精度问题"""
     try:
         if isinstance(val, str):
             val = val.replace(",", "").strip()
-        return Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        d = Decimal(str(val))
+        # 检查是否有分以下的数值（厘）
+        truncated = d.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        if truncated != d:
+            return truncated, True  # (值, 有警告)
+        return truncated, False
     except Exception:
-        return Decimal("0.00")
+        return Decimal("0.00"), False
 
 
-def _read_icbc_rows(filepath):
+def _read_icbc_rows(filepath, warnings):
     """读取工商银行 3 列格式，映射为建设银行 9 列"""
     wb = xlrd.open_workbook(filepath)
     ws = wb.sheet_by_index(0)
@@ -89,12 +94,14 @@ def _read_icbc_rows(filepath):
         seq = len(rows) + 1
         account = str(ws.cell_value(r, 0)).strip()
         name = str(ws.cell_value(r, 1)).strip()
-        amount = _to_decimal(ws.cell_value(r, 2))
+        amount, warned = _to_decimal(ws.cell_value(r, 2))
+        if warned:
+            warnings.append(f"{os.path.basename(filepath)} 第{r+1}行 {name} 金额 {ws.cell_value(r, 2)} 含分以下数值，已舍去")
         rows.append([seq, account, name, amount, "1", "工商银行", "", "", ""])
     return rows
 
 
-def _read_ccb_rows(filepath):
+def _read_ccb_rows(filepath, warnings):
     """读取建设银行 9 列格式，按模板要求：跨行标识填0，行名留空"""
     wb = xlrd.open_workbook(filepath)
     ws = wb.sheet_by_index(0)
@@ -106,7 +113,10 @@ def _read_ccb_rows(filepath):
             val = ws.cell_value(r, c)
             # 金额列（索引3）转数字
             if c == 3:
-                val = _to_decimal(val)
+                val, warned = _to_decimal(val)
+                if warned:
+                    name = str(ws.cell_value(r, 2)).strip()
+                    warnings.append(f"{os.path.basename(filepath)} 第{r+1}行 {name} 金额 {ws.cell_value(r, 3)} 含分以下数值，已舍去")
             row.append(val)
         # 序号重新生成
         row[0] = seq
@@ -117,7 +127,7 @@ def _read_ccb_rows(filepath):
     return rows
 
 
-def _read_jlb_rows(filepath):
+def _read_jlb_rows(filepath, warnings):
     """读取吉林银行 9 列格式，按模板要求：跨行标识填1，行名有值用值无则'吉林银行'"""
     wb = xlrd.open_workbook(filepath)
     ws = wb.sheet_by_index(0)
@@ -129,7 +139,10 @@ def _read_jlb_rows(filepath):
             val = ws.cell_value(r, c)
             # 金额列（索引3）转数字
             if c == 3:
-                val = _to_decimal(val)
+                val, warned = _to_decimal(val)
+                if warned:
+                    name = str(ws.cell_value(r, 2)).strip()
+                    warnings.append(f"{os.path.basename(filepath)} 第{r+1}行 {name} 金额 {ws.cell_value(r, 3)} 含分以下数值，已舍去")
             row.append(val)
         # 序号重新生成
         row[0] = seq
@@ -156,7 +169,7 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
     工商银行: 3列 → 映射到9列
     合并文件名: {单位名}-{年月}-{银行1}{行数}-{银行2}{行数}.xlsx
     银行按字母排序（建设银行 < 工商银行 < 吉林银行）
-    返回: [merged_filename, ...] 已排序
+    返回: (merged_files, warnings) 已排序
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -166,6 +179,7 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
         units.setdefault(unit_name, []).append((new_name, old_name, bank_name))
 
     merged_files = []
+    warnings = []
 
     # 计算序号位数（根据文件总数）
     total_units = len(units)
@@ -192,11 +206,11 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
                 filepath = os.path.join(bank_dir, old_name)
                 bt = detect_bank_type(old_name)
                 if bt == "icbc":
-                    bank_rows.extend(_read_icbc_rows(filepath))
+                    bank_rows.extend(_read_icbc_rows(filepath, warnings))
                 elif bt == "ccb":
-                    bank_rows.extend(_read_ccb_rows(filepath))
+                    bank_rows.extend(_read_ccb_rows(filepath, warnings))
                 elif bt == "jlb":
-                    bank_rows.extend(_read_jlb_rows(filepath))
+                    bank_rows.extend(_read_jlb_rows(filepath, warnings))
             # 重新编号（跨银行连续递增）
             for i, row in enumerate(bank_rows):
                 row[0] = len(all_rows) + i + 1
@@ -234,7 +248,7 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
         wb.save(merged_path)
         merged_files.append(merged_name)
 
-    return sorted(merged_files)
+    return sorted(merged_files), warnings
 
 
 def match_payroll_files(merged_files_list, payroll_dir):
@@ -425,13 +439,14 @@ def batch_print(matched_pairs, progress_callback=None):
 
 
 def generate_report_xlsx(output_dir, renamed, matched, unmatched, duplicates,
-                         success=None, fail=None, fail_list=None):
+                         merge_warnings=None, success=None, fail=None, fail_list=None):
     """
     生成合并打印操作记录 xlsx
     renamed: [(new_name, old_name, bank_name, unit_name), ...]
     matched: [(merged_filename, payroll_filepath, unit_name), ...]
     unmatched: [payroll_filename, ...]
     duplicates: {unit_name: [filenames, ...], ...}
+    merge_warnings: [str, ...] 金额警告
     success/fail/fail_list: 打印结果（仅打印模式有值）
     返回: 报告文件路径
     """
@@ -519,6 +534,15 @@ def generate_report_xlsx(output_dir, renamed, matched, unmatched, duplicates,
         if unit_name in duplicates:
             note = f"存在多个工资表文件，仅使用 {os.path.basename(payroll_path) if payroll_path else '第一个'}"
         ws.cell(row=row, column=8, value=note)
+
+    # ── 金额警告 ──
+    if merge_warnings:
+        row += 2
+        ws.cell(row=row, column=1, value="金额警告（分以下数值已舍去）：")
+        ws.cell(row=row, column=1).font = openpyxl.styles.Font(bold=True, color="FF8C00")
+        for w in merge_warnings:
+            row += 1
+            ws.cell(row=row, column=1, value=w)
 
     # ── 未匹配工资表 ──
     if unmatched:
@@ -726,8 +750,12 @@ class BatchPrintGUI:
         # 步骤 2：合并银行报盘文件
         self.log("【步骤2】合并银行报盘文件...")
         try:
-            merged = merge_bank_files(renamed, self.bank_dir, self.output_dir)
+            merged, merge_warnings = merge_bank_files(renamed, self.bank_dir, self.output_dir)
             self.log(f"  ✓ 合并完成：{len(merged)} 个合并文件")
+            if merge_warnings:
+                self.log(f"  ⚠ 金额警告（分以下数值已舍去）：")
+                for w in merge_warnings:
+                    self.log(f"    - {w}")
         except Exception as e:
             self.log(f"  ✗ 合并失败：{e}")
             self._set_busy(False)
@@ -811,7 +839,7 @@ class BatchPrintGUI:
         try:
             report_path = generate_report_xlsx(
                 self.output_dir, renamed, matched,
-                unmatched, duplicates, success, fail, fail_list
+                unmatched, duplicates, merge_warnings, success, fail, fail_list
             )
             self.log(f"  📄 操作记录已保存：{report_path}")
         except Exception as e:
@@ -844,8 +872,12 @@ class BatchPrintGUI:
         # 步骤 2：合并
         self.log("【步骤2】合并银行报盘文件...")
         try:
-            merged = merge_bank_files(renamed, self.bank_dir, self.output_dir)
+            merged, merge_warnings = merge_bank_files(renamed, self.bank_dir, self.output_dir)
             self.log(f"  ✓ 合并完成：{len(merged)} 个合并文件")
+            if merge_warnings:
+                self.log(f"  ⚠ 金额警告（分以下数值已舍去）：")
+                for w in merge_warnings:
+                    self.log(f"    - {w}")
         except Exception as e:
             self.log(f"  ✗ 合并失败：{e}")
             self._set_busy(False)
@@ -883,7 +915,7 @@ class BatchPrintGUI:
         # 生成操作记录
         try:
             report_path = generate_report_xlsx(
-                self.output_dir, renamed, matched, unmatched, duplicates
+                self.output_dir, renamed, matched, unmatched, duplicates, merge_warnings
             )
             self.log(f"  📄 操作记录已保存：{report_path}")
         except Exception as e:
