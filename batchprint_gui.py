@@ -1326,6 +1326,7 @@ class BatchPrintGUI:
             self._set_busy(False)
             return
 
+        self.log(f"  📁 输出目录：{self.output_dir}")
         if tax_path:
             self.log(f"  ✓ 有个税工资表：{os.path.basename(tax_path)}")
         if no_tax_path:
@@ -1391,6 +1392,7 @@ class BatchPrintGUI:
             self._set_busy(False)
             return
 
+        self.log(f"  📁 输出目录：{self.output_dir}")
         if tax_path:
             self.log(f"  ✓ 有个税工资表：{os.path.basename(tax_path)}")
         if no_tax_path:
