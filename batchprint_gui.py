@@ -1438,12 +1438,24 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                 except Exception:
                     pass
 
-        unit_name = fname
-        for sep in ["2026年06月工资表", "202606工资表", "202606工资"]:
-            if sep in fname:
-                unit_name = fname.split(sep, 1)[0].strip()
-                break
-        unit_name = unit_name.replace("signed_", "").strip()
+        unit_name = ""
+        if len(headers) > 1:
+            raw = headers[1]
+            # B2（column 1）为实际单位名称；若为空/仅"单位"，回退 A2
+            val = str(raw[1]).strip() if len(raw) > 1 and raw[1] else ""
+            if not val or val in ("单位",):
+                val = str(raw[0]).strip() if len(raw) > 0 and raw[0] else ""
+            if val.startswith("名称："):
+                val = val[3:]
+            unit_name = val.strip()
+        if not unit_name:
+            # 兜底：从文件名提取
+            unit_name = fname
+            for sep in ["2026年06月工资表", "202606工资表", "202606工资"]:
+                if sep in fname:
+                    unit_name = fname.split(sep, 1)[0].strip()
+                    break
+            unit_name = unit_name.replace("signed_", "").strip()
 
         for row in data_rows:
             tax_val = row[tax_col] if tax_col is not None else 0
@@ -1523,7 +1535,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     header_rows.append(title_row)
 
     unit_row = [""] * max_output_cols
-    unit_row[0] = "单位\n名称：吉林大学"
+    unit_row[0] = "单位名称：吉林大学"
     header_rows.append(unit_row)
 
     main_row = []
@@ -1687,12 +1699,17 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         # 标题行 A1:AH1
         ws.merge_cells(f"A1:{title_end_col}1")
 
-        # Row 2（单位信息）：跨列居左显示
+        # Row 2（单位信息）：左侧单位名称 + 右侧制表时间
+        from datetime import datetime
+        split_col = min(22, max_output_cols)  # 左半宽列号
+        left_end = openpyxl.utils.get_column_letter(split_col)
         try:
-            ws.merge_cells(f"A2:{title_end_col}2")
+            ws.merge_cells(f"A2:{left_end}2")
         except Exception:
             pass
-        ws.cell(row=2, column=1).alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
+        ws.cell(row=2, column=1).alignment = Alignment(horizontal='left', vertical='center')
+        ws.cell(row=2, column=max_output_cols, value=datetime.now().strftime("制表时间：%Y-%m-%d")
+               ).alignment = Alignment(horizontal='right', vertical='center')
 
         # Rows 3-5：按 canonical_cols 规则合并
 
