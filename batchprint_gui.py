@@ -2313,10 +2313,8 @@ class ValidationConfigDialog:
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("验证规则配置")
-        self.dialog.geometry("700x560")
-        self.dialog.minsize(600, 450)
         self.dialog.transient(parent)
-        self.dialog.grab_set()
+        self.dialog.resizable(True, True)
 
         main_frame = tk.Frame(self.dialog, padx=16, pady=12)
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -2415,6 +2413,22 @@ class ValidationConfigDialog:
                   padx=12, pady=2).pack(side=tk.RIGHT, padx=(8, 0))
         tk.Button(btn_bar, text="关闭", command=self._on_close,
                   padx=12, pady=2).pack(side=tk.RIGHT)
+
+        # ── 布局完成后自适应大小并居中 ──
+        self.dialog.update_idletasks()
+        self.dialog.minsize(780, 560)
+        # 如果自然尺寸小于最小值，用最小值
+        w = max(self.dialog.winfo_reqwidth(), 780)
+        h = max(self.dialog.winfo_reqheight(), 560)
+        # 居中于父窗口
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        px = parent.winfo_rootx()
+        py = parent.winfo_rooty()
+        x = px + (pw - w) // 2
+        y = py + (ph - h) // 2
+        self.dialog.geometry(f"{w}x{h}+{max(0,x)}+{max(0,y)}")
+        self.dialog.grab_set()
 
         self.dialog.wait_window()
 
@@ -2525,9 +2539,8 @@ class _FormulaEditDialog:
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("编辑公式")
-        self.dialog.geometry("500x400")
         self.dialog.transient(parent)
-        self.dialog.grab_set()
+        self.dialog.resizable(True, True)
 
         main = tk.Frame(self.dialog, padx=12, pady=10)
         main.pack(fill=tk.BOTH, expand=True)
@@ -2593,6 +2606,20 @@ class _FormulaEditDialog:
                   padx=12).pack(side=tk.RIGHT)
 
         self.dialog.protocol("WM_DELETE_WINDOW", self.dialog.destroy)
+
+        # ── 布局完成后自适应大小并居中 ──
+        self.dialog.update_idletasks()
+        self.dialog.minsize(560, 420)
+        w = max(self.dialog.winfo_reqwidth(), 560)
+        h = max(self.dialog.winfo_reqheight(), 420)
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        px = parent.winfo_rootx()
+        py = parent.winfo_rooty()
+        x = px + (pw - w) // 2
+        y = py + (ph - h) // 2
+        self.dialog.geometry(f"{w}x{h}+{max(0,x)}+{max(0,y)}")
+        self.dialog.grab_set()
 
     def _add_rhs_row(self, kw_list):
         frame = tk.Frame(self.rhs_inner)
