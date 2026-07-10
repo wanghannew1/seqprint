@@ -1473,7 +1473,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         insert_pos = name_col_in_canonical + 1
         canonical_cols.insert(insert_pos, "结算单元")
         for i, (uname, tax_amt, nrow) in enumerate(normalized_data):
-            nrow.insert(insert_pos, uname)
+            display_name = uname[4:] if uname.startswith("吉林大学") and len(uname) > 4 else uname
+            nrow.insert(insert_pos, display_name)
 
     # 删除全零列（从第4列 基本工资 开始检查）
     cols_to_remove = set()
@@ -1629,12 +1630,14 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
 
         # ── 写入数据行 ──
         data_start = num_header_rows + 1
+        settle_unit_col = next((i for i, n in enumerate(canonical_cols) if n == "结算单元"), None)
         for i, (uname, tax_amt, row) in enumerate(group, 1):
             row[0] = i
             for c_idx, val in enumerate(row):
                 cell = ws.cell(row=data_start + i - 1, column=c_idx + 1, value=val)
                 cell.border = thin_border
-                cell.alignment = center_align_nowrap
+                cell.alignment = (Alignment(horizontal='center', vertical='center', wrap_text=True)
+                                  if c_idx == settle_unit_col else center_align_nowrap)
                 if c_idx >= 6:
                     try:
                         float(val)
@@ -1767,7 +1770,22 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             elif cname in ("身份证",):
                 ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 20
             elif cname in ("结算单元",):
-                ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 18
+                # 动态计算列宽：基于数据实际宽度，取 90% 分位
+                widths = []
+                for _, _, row in group:
+                    val = str(row[c - 1]) if c - 1 < len(row) else ""
+                    if not val:
+                        continue
+                    # CJK 字符约 2 个宽度单位，ASCII 约 1
+                    w = sum(2 if ord(ch) > 127 else 1 for ch in val)
+                    widths.append(w)
+                if widths:
+                    widths.sort()
+                    p90 = widths[int(len(widths) * 0.9)]
+                    col_w = max(min(p90 + 2, 30), 6)
+                else:
+                    col_w = 12
+                ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = col_w
             elif cname.startswith("扣款明细"):
                 ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 9
             else:
