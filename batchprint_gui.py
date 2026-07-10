@@ -1419,6 +1419,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     sample_header = None
     sample_merged_cells = None
     sample_images = None
+    fill_dates = []  # 各文件填报时间
 
     for priority, fname in sorted_files:
         path = os.path.join(payroll_dir, fname)
@@ -1448,6 +1449,14 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             if val.startswith("名称："):
                 val = val[3:]
             unit_name = val.strip()
+            # 收集填报时间
+            for cell_val in raw:
+                if cell_val and "填报时间" in str(cell_val):
+                    import re
+                    m = re.search(r"\d{4}-\d{2}-\d{2}", str(cell_val))
+                    if m:
+                        fill_dates.append(m.group(0))
+
         if not unit_name:
             # 兜底：从文件名提取
             unit_name = fname
@@ -1467,6 +1476,11 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
 
     if not all_data:
         return None, None, None, None
+
+    # 取所有源文件中出现次数最多的填报时间
+    from collections import Counter
+    fill_date_counts = Counter(fill_dates)
+    most_common_fill_date = fill_date_counts.most_common(1)[0][0] if fill_date_counts else ""
 
     canonical_cols = _get_canonical_columns(all_file_col_names)
     canonical_cols = [c for c in canonical_cols if c not in ("部门", "岗位", "职工号")]
@@ -1700,7 +1714,6 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         ws.merge_cells(f"A1:{title_end_col}1")
 
         # Row 2（单位信息）：左侧单位名称 + 右侧制表时间
-        from datetime import datetime
         split_col = min(22, max_output_cols)  # 左半宽列号
         left_end = openpyxl.utils.get_column_letter(split_col)
         try:
@@ -1708,8 +1721,10 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         except Exception:
             pass
         ws.cell(row=2, column=1).alignment = Alignment(horizontal='left', vertical='center')
-        ws.cell(row=2, column=max_output_cols, value=datetime.now().strftime("制表时间：%Y-%m-%d")
-               ).alignment = Alignment(horizontal='right', vertical='center')
+        fill_date_str = f"制表时间：{most_common_fill_date}" if most_common_fill_date else ""
+        if fill_date_str:
+            ws.cell(row=2, column=max_output_cols, value=fill_date_str
+                   ).alignment = Alignment(horizontal='right', vertical='center')
 
         # Rows 3-5：按 canonical_cols 规则合并
 

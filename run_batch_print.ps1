@@ -18,9 +18,10 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# 启动程序
+# 启动程序（后台异步启动，不阻塞 PowerShell 脚本）
 Write-Host "正在启动程序..." -ForegroundColor Green
-uv run python batchprint_gui.py
+Start-Process -NoNewWindow uv -ArgumentList "run python batchprint_gui.py"
+Write-Host "程序已启动，请切换到程序窗口操作" -ForegroundColor Green
 
 # 暂停
 Read-Host "按回车退出"
