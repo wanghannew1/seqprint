@@ -1413,7 +1413,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     sorted_files = sorted(unit_file_map.values(), key=lambda x: x[0])
 
     # 读取所有工资表
-    all_data = []
+    all_data = []  # (unit_name, tax_amt, row, headers, fname, source_excel_row)
     all_file_col_names = []
     file_name_to_idx_map = {}
     sample_header = None
@@ -1466,13 +1466,14 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                     break
             unit_name = unit_name.replace("signed_", "").strip()
 
-        for row in data_rows:
+        for row_idx, row in enumerate(data_rows):
             tax_val = row[tax_col] if tax_col is not None else 0
             try:
                 tax_amt = float(tax_val) if tax_val else 0
             except (ValueError, TypeError):
                 tax_amt = 0
-            all_data.append((unit_name, tax_amt, row, headers))
+            source_excel_row = row_idx + 6  # 5 行表头 + 1-based
+            all_data.append((unit_name, tax_amt, row, headers, fname, source_excel_row))
 
     if not all_data:
         return None, None, None, None
@@ -1485,10 +1486,10 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     canonical_cols = _get_canonical_columns(all_file_col_names)
     canonical_cols = [c for c in canonical_cols if c not in ("部门", "岗位", "职工号")]
 
-    normalized_data = []
-    for unit_name, tax_amt, row, headers in all_data:
+    normalized_data = []  # (unit_name, tax_amt, norm_row, source_file, source_excel_row)
+    for unit_name, tax_amt, row, headers, fname, source_excel_row in all_data:
         norm_row = _normalize_row_by_names(row, headers, canonical_cols)
-        normalized_data.append((unit_name, tax_amt, norm_row))
+        normalized_data.append((unit_name, tax_amt, norm_row, fname, source_excel_row))
 
     name_col_in_canonical = None
     for c, name in enumerate(canonical_cols):
@@ -1498,14 +1499,17 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     if name_col_in_canonical is not None:
         insert_pos = name_col_in_canonical + 1
         canonical_cols.insert(insert_pos, "结算单元")
-        for i, (uname, tax_amt, nrow) in enumerate(normalized_data):
+        for i, rec in enumerate(normalized_data):
+            uname, tax_amt, nrow, fname, src_row = rec
             nrow.insert(insert_pos, uname)
+            normalized_data[i] = (uname, tax_amt, nrow, fname, src_row)
 
     # 删除全零列（从第4列 基本工资 开始检查）
     cols_to_remove = set()
     for c in range(4, len(canonical_cols)):
         all_zero = True
-        for _, _, row in normalized_data:
+        for rec in normalized_data:
+            row = rec[2]
             val = row[c] if c < len(row) else None
             try:
                 if float(val or 0) != 0:
@@ -1532,8 +1536,10 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             canonical_cols.pop(illness_idx)
             canonical_cols.insert(trans_idx, "大病险")
             for i in range(len(normalized_data)):
-                val = normalized_data[i][2].pop(illness_idx)
-                normalized_data[i][2].insert(trans_idx, val)
+                rec = list(normalized_data[i])
+                val = rec[2].pop(illness_idx)
+                rec[2].insert(trans_idx, val)
+                normalized_data[i] = tuple(rec)
             # 调整 max_output_cols（后面会重新从 canonical_cols 长度取）
             # 转账合计公式用的大病险值不变，只是列移动了
 
@@ -1656,7 +1662,11 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         # ── 写入数据行 ──
         data_start = num_header_rows + 1
         settle_unit_col = next((i for i, n in enumerate(canonical_cols) if n == "结算单元"), None)
-        for i, (uname, tax_amt, row) in enumerate(group, 1):
+        # 记录每个源数据行对应的输出行号
+        output_row_map = []  # [(source_file, source_excel_row, output_excel_row), ...]
+        for i, rec in enumerate(group, 1):
+            uname, tax_amt, row, fname, src_row = rec[0], rec[1], rec[2], rec[3], rec[4] if len(rec) > 3 else ("", 0)
+            output_row_map.append((fname, src_row, data_start + i - 1))
             row[0] = i
             for c_idx, val in enumerate(row):
                 cell = ws.cell(row=data_start + i - 1, column=c_idx + 1, value=val)
@@ -1679,7 +1689,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         for c in range(2, max_output_cols + 1):
             total = 0.0
             all_num = True
-            for _, _, row in group:
+            for rec in group:
+                row = rec[2]
                 v = row[c - 1] if c - 1 < len(row) else 0
                 try:
                     total += float(v or 0)
@@ -1701,7 +1712,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             1: "总经理签字：",
             7: "部长签字：",
             13: "财务审核：",
-            19: "制表人：张朦",
+            18: "业务审核：",
+            24: "制表人：张朦",
         }
         for col, label in sign_labels.items():
             ws.cell(row=sign_row_idx, column=col, value=label)
@@ -1813,7 +1825,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             elif cname in ("结算单元",):
                 # 动态计算列宽：基于数据实际宽度，取 90% 分位
                 widths = []
-                for _, _, row in group:
+                for rec in group:
+                    row = rec[2]
                     val = str(row[c - 1]) if c - 1 < len(row) else ""
                     if not val:
                         continue
@@ -1837,25 +1850,37 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             from openpyxl.drawing.image import Image as XLImage
             from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
             import io
-            sign_cols_0based = [0, 6, 12, 18]
-            for i, (img_data, orig_row, orig_col, width, height) in enumerate(sample_images[:4]):
+            # 源列 → 输出列映射（openpyxl _from.col 是 0-based）
+            sig_map = {
+                2: 1,    # 总经理签字
+                9: 7,    # 部长签字
+                19: 13,  # 财务审核
+                26: 18,  # 业务审核
+            }
+            for img_data, orig_row, orig_col, width, height in sample_images:
+                out_col = sig_map.get(orig_col)
+                if out_col is None:
+                    continue
                 try:
                     new_img = XLImage(io.BytesIO(img_data))
                     new_img.width = width
                     new_img.height = height
-                    col = sign_cols_0based[i] if i < len(sign_cols_0based) else 0
                     new_anchor = OneCellAnchor()
-                    new_anchor._from = AnchorMarker(col=col, row=sign_row_idx - 1)
+                    new_anchor._from = AnchorMarker(col=out_col - 1, row=sign_row_idx - 1)
                     new_img.anchor = new_anchor
                     ws.add_image(new_img)
                 except Exception:
                     pass
 
         wb.save(fpath)
-        return fpath
+        return fpath, output_row_map
 
-    tax_path = write_payroll(tax_group, "有个税")
-    no_tax_path = write_payroll(no_tax_group, "无个税")
+    tax_result = write_payroll(tax_group, "有个税")
+    no_tax_result = write_payroll(no_tax_group, "无个税")
+    tax_path = tax_result[0] if tax_result else None
+    no_tax_path = no_tax_result[0] if no_tax_result else None
+    tax_row_map = tax_result[1] if tax_result else []
+    no_tax_row_map = no_tax_result[1] if no_tax_result else []
 
     # ── 验证 ──
     validation_results = {}
@@ -1875,6 +1900,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     # 生成对应的银行报盘文件
     tax_bank_path = None
     no_tax_bank_path = None
+    tax_bank_prov = []
+    no_tax_bank_prov = []
     if bank_dir:
         bank_files = [f for f in os.listdir(bank_dir) if f.lower().endswith(".xls")]
         bank_map = {}
@@ -1887,10 +1914,11 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
 
         def write_bank(group_data, suffix):
             if not group_data:
-                return None
-            all_bank_rows = []
+                return None, []
+            all_bank_rows = []  # [(row_data, source_file, source_row, bank_type), ...]
             seen_units = set()
-            for unit_name, _, _ in group_data:
+            for rec in group_data:
+                unit_name = rec[0]
                 if unit_name in bank_map and unit_name not in seen_units:
                     seen_units.add(unit_name)
                     fname = bank_map[unit_name]
@@ -1902,12 +1930,16 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                         rows = _read_ccb_rows(fpath, [])
                     elif bt == "jlb":
                         rows = _read_jlb_rows(fpath, [])
-                    all_bank_rows.extend(rows)
+                    else:
+                        continue
+                    for src_idx, row in enumerate(rows):
+                        src_excel_row = src_idx + 2  # 1 header row + 1-based
+                        all_bank_rows.append((row, fname, src_excel_row, bt))
 
             if not all_bank_rows:
-                return None
+                return None, []
 
-            for i, row in enumerate(all_bank_rows, 1):
+            for i, (row, _, _, _) in enumerate(all_bank_rows, 1):
                 row[0] = i
 
             fname = f"银行报盘_{suffix}_{ts}.xlsx"
@@ -1916,20 +1948,114 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             ws = wb.active
             ws.title = f"银行报盘_{suffix}"
             ws.append(HEADERS)
-            for row_idx, row in enumerate(all_bank_rows, start=2):
+            bank_prov = []  # [(src_file, src_row, account, name, amount, bank_type, output_file, output_row), ...]
+            for out_idx, (row, src_file, src_row, bt) in enumerate(all_bank_rows, start=2):
                 for c, val in enumerate(row, start=1):
                     if val is None or val == "":
                         continue
-                    cell = ws.cell(row=row_idx, column=c, value=val)
+                    cell = ws.cell(row=out_idx, column=c, value=val)
                     if c == 4:
                         cell.number_format = "0.00"
+                bank_prov.append((src_file, src_row,
+                                  str(row[1]) if len(row) > 1 else "",   # 账号
+                                  str(row[2]) if len(row) > 2 else "",   # 户名
+                                  str(row[3]) if len(row) > 3 else "",   # 金额
+                                  bt,
+                                  fname, out_idx - 1))  # 输出行号
             wb.save(fpath)
-            return fpath
+            return fpath, bank_prov
 
-        tax_bank_path = write_bank(tax_group, "有个税")
-        no_tax_bank_path = write_bank(no_tax_group, "无个税")
+        tax_bank_result = write_bank(tax_group, "有个税")
+        no_tax_bank_result = write_bank(no_tax_group, "无个税")
+        tax_bank_path = tax_bank_result[0] if tax_bank_result else None
+        no_tax_bank_path = no_tax_bank_result[0] if no_tax_bank_result else None
+        tax_bank_prov = tax_bank_result[1] if tax_bank_result else []
+        no_tax_bank_prov = no_tax_bank_result[1] if no_tax_bank_result else []
 
-    return tax_path, no_tax_path, tax_bank_path, no_tax_bank_path, validation_results
+    # ── 构建操作记录 ──
+    col_name_idx = {n: i for i, n in enumerate(canonical_cols)}
+    payroll_provenance = []  # [(src_file, src_row, unit, name, id_num, total_pay, out_file, out_row, settle_unit, tax_type), ...]
+    for group_data, suffix, row_map in [(tax_group, "有个税", tax_row_map), (no_tax_group, "无个税", no_tax_row_map)]:
+        out_fname = f"吉林大学2026年06月人才派遣人员工资发放表_{suffix}.xlsx"
+        for rec, (_, _, out_row) in zip(group_data, row_map):
+            uname, _, nrow, src_file, src_row = rec
+            name = str(nrow[col_name_idx["姓名"]]) if "姓名" in col_name_idx and col_name_idx["姓名"] < len(nrow) else ""
+            id_no = str(nrow[col_name_idx["身份证"]]) if "身份证" in col_name_idx and col_name_idx["身份证"] < len(nrow) else ""
+            total_pay = nrow[col_name_idx["实发合计"]] if "实发合计" in col_name_idx and col_name_idx["实发合计"] < len(nrow) else ""
+            settle_unit = str(nrow[col_name_idx["结算单元"]]) if "结算单元" in col_name_idx and col_name_idx["结算单元"] < len(nrow) else ""
+            payroll_provenance.append((src_file, src_row, uname, name, id_no, total_pay, out_fname, out_row, settle_unit, suffix))
+
+    # 姓名 → 银行记录索引（一对多，重名可能有多个）
+    from collections import defaultdict
+    bank_by_name = defaultdict(list)
+    for b_idx, bp in enumerate(tax_bank_prov + no_tax_bank_prov):
+        bank_name = bp[3].strip()  # 户名
+        if bank_name:
+            bank_by_name[bank_name].append(b_idx)
+
+    # 生成操作记录 Excel
+    op_log_path = os.path.join(output_dir, f"操作记录_{ts}.xlsx")
+    log_wb = openpyxl.Workbook()
+
+    # ---- Sheet 1: 工资表明细 ----
+    ws1 = log_wb.active
+    ws1.title = "工资表明细"
+    ws1.append(["原始工资表文件", "原始行号", "原始单位名称", "姓名", "身份证号", "实发合计",
+                "目标单位（结算单元）", "输出文件", "输出行号", "类型", "银行匹配状态", "重名标记", "备注"])
+    name_bank_hits = defaultdict(list)
+    for pp in payroll_provenance:
+        src_file, src_row, unit, name, id_no, total_pay, out_file, out_row, settle_unit, tax_type = pp
+        # 按姓名匹配银行
+        matched_banks = bank_by_name.get(name.strip(), [])
+        all_bank_prov = tax_bank_prov + no_tax_bank_prov
+        if matched_banks:
+            bank_detail = "; ".join(
+                f"{all_bank_prov[bi][5]}/{all_bank_prov[bi][1]}:{all_bank_prov[bi][6]}元"
+                for bi in matched_banks
+            )
+            dup = "⚠ 重名" if len(matched_banks) > 1 else ""
+            status = f"已匹配({len(matched_banks)}条)"
+        else:
+            bank_detail = ""
+            dup = ""
+            status = "未匹配"
+        note = dup if dup else (f"银行[{bank_detail}]" if matched_banks else "无对应银行记录")
+        ws1.append([src_file, src_row, unit, name, id_no, total_pay,
+                    settle_unit, out_file, out_row, tax_type, status, dup, note])
+
+    # ---- Sheet 2: 银行报盘明细 ----
+    ws2 = log_wb.create_sheet("银行报盘明细")
+    ws2.append(["原始报盘文件", "原始行号", "账号", "户名", "金额", "银行类型", "输出文件", "输出行号"])
+    for bp in tax_bank_prov + no_tax_bank_prov:
+        ws2.append(list(bp))
+
+    # ---- Sheet 3: 汇总 ----
+    ws3 = log_wb.create_sheet("汇总")
+    ws3.append(["指标", "值"])
+    ws3.append(["填报时间", most_common_fill_date])
+    ws3.append(["操作时间", ts])
+    ws3.append(["工资表总人数", len(payroll_provenance)])
+    ws3.append(["有个税人数", len(tax_group)])
+    ws3.append(["无个税人数", len(no_tax_group)])
+    ws3.append(["银行报盘总笔数", len(tax_bank_prov) + len(no_tax_bank_prov)])
+    ws3.append(["银行已匹配人数", sum(1 for pp in payroll_provenance if bank_by_name.get(pp[3].strip(), []))])
+    ws3.append(["银行未匹配人数", sum(1 for pp in payroll_provenance if not bank_by_name.get(pp[3].strip(), []))])
+    ws3.append(["重名人数", sum(1 for bps in bank_by_name.values() if len(bps) > 1)])
+    ws3.append(["输出文件（有个税）", os.path.basename(tax_path) if tax_path else ""])
+    ws3.append(["输出文件（无个税）", os.path.basename(no_tax_path) if no_tax_path else ""])
+    ws3.append(["银行报盘（有个税）", os.path.basename(tax_bank_path) if tax_bank_path else ""])
+    ws3.append(["银行报盘（无个税）", os.path.basename(no_tax_bank_path) if no_tax_bank_path else ""])
+
+    # 列宽自适应
+    for ws in [ws1, ws2, ws3]:
+        for col_cells in ws.columns:
+            max_len = max((len(str(c.value or "")) for c in col_cells), default=8)
+            col_letter = openpyxl.utils.get_column_letter(col_cells[0].column)
+            ws.column_dimensions[col_letter].width = min(max_len + 3, 60)
+
+    log_wb.save(op_log_path)
+
+    return tax_path, no_tax_path, tax_bank_path, no_tax_bank_path, validation_results, op_log_path
 
 
 # ──────────────────────────────────────────────
@@ -2353,7 +2479,7 @@ class BatchPrintGUI:
         self.log("")
 
         try:
-            tax_path, no_tax_path, tax_bank_path, no_tax_bank_path, validation_results = merge_payrolls_by_tax(
+            tax_path, no_tax_path, tax_bank_path, no_tax_bank_path, validation_results, op_log_path = merge_payrolls_by_tax(
                 self.payroll_dir, self.output_dir, self.bank_dir
             )
         except Exception as e:
@@ -2372,6 +2498,8 @@ class BatchPrintGUI:
             self.log(f"  ✓ 有个税银行报盘：{os.path.basename(tax_bank_path)}")
         if no_tax_bank_path:
             self.log(f"  ✓ 无个税银行报盘：{os.path.basename(no_tax_bank_path)}")
+        if op_log_path:
+            self.log(f"  ✓ 操作记录：{os.path.basename(op_log_path)}")
 
         # ── 验证结果 ──
         _log_validation_results(self, validation_results)
@@ -2422,7 +2550,7 @@ class BatchPrintGUI:
         self.log("")
 
         try:
-            tax_path, no_tax_path, tax_bank_path, no_tax_bank_path, validation_results = merge_payrolls_by_tax(
+            tax_path, no_tax_path, tax_bank_path, no_tax_bank_path, validation_results, op_log_path = merge_payrolls_by_tax(
                 self.payroll_dir, self.output_dir, self.bank_dir
             )
         except Exception as e:
@@ -2441,6 +2569,8 @@ class BatchPrintGUI:
             self.log(f"  ✓ 有个税银行报盘：{os.path.basename(tax_bank_path)}")
         if no_tax_bank_path:
             self.log(f"  ✓ 无个税银行报盘：{os.path.basename(no_tax_bank_path)}")
+        if op_log_path:
+            self.log(f"  ✓ 操作记录：{os.path.basename(op_log_path)}")
 
         # ── 验证结果 ──
         _log_validation_results(self, validation_results)
