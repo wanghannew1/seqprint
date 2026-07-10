@@ -10,6 +10,7 @@ from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from tkinter import filedialog, messagebox, scrolledtext
 
 import openpyxl
+from openpyxl.styles import Border, Side, Font, Alignment
 import xlrd
 
 HEADERS = ["序号", "账户", "户名", "金额", "跨行标识", "行名", "联行行号", "摘要", "备注"]
@@ -1524,47 +1525,26 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     main_row = []
     sub1_row = []
     sub2_row = []
-    prev_main = ""
-    prev_sub1 = ""
     for cname in canonical_cols:
         if cname == "结算单元":
             main_row.append("结算单元")
             sub1_row.append("")
             sub2_row.append("")
-            prev_main = "结算单元"
-            prev_sub1 = ""
             continue
         if "/" in cname:
             parts = cname.split("/", 1)
             main_val = parts[0]
-            if main_val == prev_main:
-                main_row.append("")
-            else:
-                main_row.append(main_val)
-                prev_main = main_val
+            main_row.append(main_val)
             sub = parts[1]
             if "/" in sub:
                 sp = sub.split("/", 1)
-                sub1_val = sp[0]
-                if sub1_val == prev_sub1:
-                    sub1_row.append("")
-                else:
-                    sub1_row.append(sub1_val)
-                    prev_sub1 = sub1_val
+                sub1_row.append(sp[0])
                 sub2_row.append(sp[1])
             else:
-                if sub == prev_sub1:
-                    sub1_row.append("")
-                else:
-                    sub1_row.append(sub)
-                    prev_sub1 = sub
+                sub1_row.append(sub)
                 sub2_row.append("")
         else:
-            if cname == prev_main:
-                main_row.append("")
-            else:
-                main_row.append(cname)
-                prev_main = cname
+            main_row.append(cname)
             sub1_row.append("")
             sub2_row.append("")
 
@@ -1610,31 +1590,59 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         ws = wb.active
         ws.title = f"工资发放表_{suffix}"
 
+        # ── 页面设置 ──
         ws.page_setup.orientation = 'landscape'
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = 0
-        ws.page_margins.left = 1.5
-        ws.page_margins.right = 0.5
-        ws.page_margins.top = 0.75
-        ws.page_margins.bottom = 0.75
+        ws.page_margins.left = 0.5
+        ws.page_margins.right = 0.3
+        ws.page_margins.top = 0.5
+        ws.page_margins.bottom = 0.5
 
+        # ── 通用样式 ──
+        thin_side = Side(style='thin')
+        thin_border = Border(left=thin_side, right=thin_side,
+                             top=thin_side, bottom=thin_side)
+        center_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        center_align_nowrap = Alignment(horizontal='center', vertical='center')
+        header_font = Font(bold=True, size=10)
+        title_font = Font(bold=True, size=14)
+
+        num_header_rows = len(header_rows)  # 3 或 4
+
+        # ── 写入表头 ──
         for r_idx, row in enumerate(header_rows):
             for c_idx, val in enumerate(row):
-                ws.cell(row=r_idx + 1, column=c_idx + 1, value=val)
+                cell = ws.cell(row=r_idx + 1, column=c_idx + 1, value=val)
+                cell.border = thin_border
+                cell.alignment = center_align
+                cell.font = header_font
 
+        # 第一行标题行：大字号、跨列合并已在 canonical_merged
+        title_cell = ws.cell(row=1, column=1)
+        title_cell.font = title_font
+
+        # ── 写入数据行 ──
+        data_start = num_header_rows + 1
         for i, (uname, tax_amt, row) in enumerate(group, 1):
             row[0] = i
             for c_idx, val in enumerate(row):
-                ws.cell(row=len(header_rows) + i, column=c_idx + 1, value=val)
+                cell = ws.cell(row=data_start + i - 1, column=c_idx + 1, value=val)
+                cell.border = thin_border
+                cell.alignment = center_align_nowrap
                 if c_idx >= 6:
                     try:
                         float(val)
-                        ws.cell(row=len(header_rows) + i, column=c_idx + 1).number_format = "0.00"
+                        cell.number_format = "0.00"
                     except (ValueError, TypeError):
                         pass
 
-        total_row_idx = len(header_rows) + len(group) + 1
-        ws.cell(row=total_row_idx, column=1, value="合计")
+        # ── 合计行 ──
+        total_row_idx = num_header_rows + len(group) + 1
+        cell = ws.cell(row=total_row_idx, column=1, value="合计")
+        cell.border = thin_border
+        cell.alignment = center_align
+        cell.font = Font(bold=True, size=10)
         for c in range(2, max_output_cols + 1):
             total = 0.0
             all_num = True
@@ -1648,7 +1656,13 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             if all_num:
                 cell = ws.cell(row=total_row_idx, column=c, value=total)
                 cell.number_format = "0.00"
+            else:
+                cell = ws.cell(row=total_row_idx, column=c)
+            cell.border = thin_border
+            cell.alignment = center_align
+            cell.font = Font(bold=True, size=10)
 
+        # ── 签名行 ──
         sign_row_idx = total_row_idx + 2
         sign_labels = {
             1: "总经理签字：",
@@ -1659,18 +1673,57 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         for col, label in sign_labels.items():
             ws.cell(row=sign_row_idx, column=col, value=label)
 
+        # ── 合并单元格 ──
         for merge_range in canonical_merged:
             try:
                 ws.merge_cells(merge_range)
             except Exception:
                 pass
 
+        # 合并表头中连续相同值的单元格（行 2 的单位名称 / 行 3-5 的层次表头）
+        for r_offset in range(num_header_rows):
+            rr = r_offset + 1  # 1-based row in sheet
+            start = 1
+            prev = None
+            for c in range(1, max_output_cols + 2):
+                cur = ws.cell(row=rr, column=c).value if c <= max_output_cols else None
+                if c > max_output_cols or cur != prev:
+                    if prev is not None and c - 1 > start:
+                        try:
+                            col_s = openpyxl.utils.get_column_letter(start)
+                            col_e = openpyxl.utils.get_column_letter(c - 1)
+                            ws.merge_cells(f"{col_s}{rr}:{col_e}{rr}")
+                        except Exception:
+                            pass
+                    start = c
+                    prev = cur
+
+        # ── 行高 ──
+        ws.row_dimensions[1].height = 36  # 标题行
+        for rr in range(2, num_header_rows + 1):
+            ws.row_dimensions[rr].height = 28  # 表头行
+        ws.row_dimensions[total_row_idx].height = 24  # 合计行
+
+        # ── 列宽（根据内容类型） ──
+        for c, cname in enumerate(canonical_cols, 1):
+            if cname in ("序号",):
+                ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 6
+            elif cname in ("姓名",):
+                ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 10
+            elif cname in ("身份证",):
+                ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 20
+            elif cname in ("结算单元",):
+                ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 18
+            elif cname.startswith("扣款明细"):
+                ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 9
+            else:
+                ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 11
+
+        # ── 签名图片 ──
         if sample_images:
             from openpyxl.drawing.image import Image as XLImage
             from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
             import io
-            # Map each image to a signature column (0-based)
-            # sign_labels are at 1-based cols: 1(总经理), 7(部长), 13(财务), 19(制表人)
             sign_cols_0based = [0, 6, 12, 18]
             for i, (img_data, orig_row, orig_col, width, height) in enumerate(sample_images[:4]):
                 try:
