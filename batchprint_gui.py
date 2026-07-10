@@ -814,13 +814,23 @@ def _build_column_name_map(headers):
 
 def _get_canonical_columns(all_file_columns):
     """从所有文件的列名构建规范列顺序。
-    使用列数最多的文件作为基准（包含所有可选列），其他文件按名称补齐。
+    以列数最多的文件作为基准，再收集其他文件独有的列追加到末尾。
     返回: [规范列名, ...] 不包含 部门/岗位/职工号
     """
     # 找到列数最多的文件作为规范基准
     longest = max(all_file_columns, key=len)
-    canonical = [c for c in longest if c not in ("部门", "岗位", "职工号")]
-    return canonical
+    base = [c for c in longest if c not in ("部门", "岗位", "职工号")]
+
+    # 收集其他文件中出现但基准中没有的列名（如 补发工资、雇主责任险）
+    extra_names = []
+    seen = set(base)
+    for cols in all_file_columns:
+        for c in cols:
+            if c not in ("部门", "岗位", "职工号") and c not in seen:
+                extra_names.append(c)
+                seen.add(c)
+
+    return base + extra_names
 
 
 def _normalize_row_by_names(row, headers, canonical_cols):
@@ -1061,21 +1071,30 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     if any(v for v in sub2_row):
         header_rows.append(sub2_row)
 
-    detail_start = None
-    detail_end = None
+    # 生成合并单元格列表（非连续的扣款明细列拆分为多个合并范围）
+    # 找到所有连续的扣款明细列区间
+    detail_ranges = []
+    range_start = None
     for c, cname in enumerate(canonical_cols, 1):
         if cname.startswith("扣款明细"):
-            if detail_start is None:
-                detail_start = c
-            detail_end = c
+            if range_start is None:
+                range_start = c
+        else:
+            if range_start is not None:
+                if c - 1 > range_start:
+                    detail_ranges.append((range_start, c - 1))
+                range_start = None
+    if range_start is not None and len(canonical_cols) >= range_start:
+        detail_ranges.append((range_start, len(canonical_cols)))
+
     title_end_col = openpyxl.utils.get_column_letter(max_output_cols)
-    detail_start_col = openpyxl.utils.get_column_letter(detail_start) if detail_start else "A"
-    detail_end_col = openpyxl.utils.get_column_letter(detail_end) if detail_end else "A"
 
     canonical_merged = []
     canonical_merged.append(f"A1:{title_end_col}1")
-    if detail_start and detail_end and detail_start < detail_end:
-        canonical_merged.append(f"{detail_start_col}3:{detail_end_col}3")
+    for ds, de in detail_ranges:
+        ds_col = openpyxl.utils.get_column_letter(ds)
+        de_col = openpyxl.utils.get_column_letter(de)
+        canonical_merged.append(f"{ds_col}3:{de_col}3")
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
