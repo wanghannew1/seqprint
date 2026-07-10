@@ -1009,6 +1009,29 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         for i, (uname, tax_amt, nrow) in enumerate(normalized_data):
             nrow.insert(insert_pos, uname)
 
+    # 删除全零列（从第4列 基本工资 开始检查）
+    cols_to_remove = set()
+    for c in range(4, len(canonical_cols)):
+        all_zero = True
+        for _, _, row in normalized_data:
+            val = row[c] if c < len(row) else None
+            try:
+                if float(val or 0) != 0:
+                    all_zero = False
+                    break
+            except (ValueError, TypeError):
+                if val and str(val).strip():
+                    all_zero = False
+                    break
+        if all_zero:
+            cols_to_remove.add(c)
+
+    if cols_to_remove:
+        for c in sorted(cols_to_remove, reverse=True):
+            del canonical_cols[c]
+            for i in range(len(normalized_data)):
+                del normalized_data[i][2][c]
+
     tax_group = [d for d in normalized_data if d[1] > 0]
     no_tax_group = [d for d in normalized_data if d[1] == 0]
 
