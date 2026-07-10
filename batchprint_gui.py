@@ -1598,6 +1598,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         ws.page_margins.right = 0.3
         ws.page_margins.top = 0.5
         ws.page_margins.bottom = 0.5
+        ws.print_title_rows = '1:5'  # 每页重复表头
 
         # ── 通用样式 ──
         thin_side = Side(style='thin')
