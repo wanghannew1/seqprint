@@ -1827,7 +1827,7 @@ class BatchPrintGUI:
         dir_frame.columnconfigure(2, weight=1)
 
         # ── 按钮区域（目录选择和日志之间） ──
-        btn_box = tk.Frame(self.root, padx=12, pady=(10, 4))
+        btn_box = tk.Frame(self.root, padx=12, pady=10)
         btn_box.pack(fill=tk.X)
 
         # 第一行：主要操作 + 验证规则
