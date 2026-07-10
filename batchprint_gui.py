@@ -914,6 +914,313 @@ def _adjust_merged_range(mrange, delete_1based_set, insert_before_1based=3):
     return f"{col_to_letter(new_from)}{from_row}:{col_to_letter(new_to)}{to_row}"
 
 
+def validate_payroll_xlsx(filepath, canonical_cols, tolerance=0.005):
+    """
+    验证生成的工资表 xlsx 中合计行数据是否符合公式，并将结果追加为新 sheet。
+
+    校验项:
+      ① 转账合计 = 应发工资 + 单位缴纳五险一金 + 单位代理费 + 雇主责任险
+      ② 转账合计 = 扣款合计 + 个人所得税 + 实发合计
+      ③ 扣款合计 = sum(扣款明细子项)
+      ④ 列加总: sum(数据行) ≈ 合计行 (基本工资、补发工资、应发工资、转账合计、实发合计等)
+      ⑤ 关键列存在性检查
+
+    参数:
+      filepath: xlsx 文件路径
+      canonical_cols: 规范列名列表 (0-based 顺序)
+      tolerance: 比较容差 (默认 0.005 元, 兼顾浮点舍入)
+
+    返回:
+      {"ok": bool, "passed_count": int, "failed_count": int, "checks": [...]}
+    """
+    from openpyxl.styles import PatternFill, Font, Alignment
+
+    wb = openpyxl.load_workbook(filepath)
+    ws = wb.active
+    nrows = ws.max_row
+    ncols = ws.max_column
+
+    # ── 列索引 (0-based) ──
+    col_idx = {name: i for i, name in enumerate(canonical_cols)}
+
+    def _col(keywords):
+        for kw in keywords:
+            if kw in col_idx:
+                return col_idx[kw]
+        return -1
+
+    def _val(row_1based, col_0based):
+        if col_0based < 0:
+            return 0.0
+        v = ws.cell(row=row_1based, column=col_0based + 1).value
+        try:
+            return round(float(v or 0), 2)
+        except (ValueError, TypeError):
+            return 0.0
+
+    # ── 找合计行 ──
+    summary_row = None
+    for r in range(1, nrows + 1):
+        if str(ws.cell(row=r, column=1).value or "").strip() == "合计":
+            summary_row = r
+            break
+
+    if summary_row is None:
+        _append_validation_sheet(wb, [{
+            "name": "合计行查找", "kind": "table_format",
+            "passed": False, "detail": "未找到合计行"
+        }])
+        wb.save(filepath)
+        wb.close()
+        return {"ok": False, "passed_count": 0, "failed_count": 1,
+                "checks": [{"name": "合计行查找", "passed": False}]}
+
+    # ── 确定表头行数 ──
+    # row1=标题, row2=单位, row3=主表头
+    # row4 若存在非空格则是子表头1, row5 则是子表头2
+    last_header_row = 3
+    for r in [4, 5]:
+        if r <= nrows:
+            has_content = any(
+                str(ws.cell(row=r, column=c).value or "").strip()
+                for c in range(1, ncols + 1)
+                if c != 1  # ignore 序号 col
+            )
+            if has_content:
+                last_header_row = r
+            else:
+                break
+
+    data_start = last_header_row + 1
+    data_end = summary_row - 1
+    data_count = max(0, data_end - data_start + 1)
+
+    # ── 关键列定位 ──
+    K = {
+        "transfer_total": _col(["转账合计"]),
+        "earnings": _col(["应发工资"]),
+        "employer_insure": _col(["单位缴纳五险一金"]),
+        "agency_fee": _col(["单位代理费"]),
+        "liability": _col(["雇主责任险"]),
+        "deduction_total": _col(["扣款明细/扣款合计", "扣款合计"]),
+        "personal_tax": _col(["个人所得税"]),
+        "net_total": _col(["实发合计"]),
+        "net_pay": _col(["实发工资"]),
+        "base_wage": _col(["基本工资"]),
+        "supplement": _col(["补发工资"]),
+    }
+
+    # ── 扣款明细子项 ──
+    deduction_sub_indices = [
+        idx for name, idx in col_idx.items()
+        if name.startswith("扣款明细/")
+        and "扣款合计" not in name
+        and "大病险合计" not in name
+    ]
+
+    checks = []
+
+    def _add_check(name, kind, passed, detail=""):
+        checks.append({
+            "name": name, "kind": kind,
+            "passed": passed, "detail": detail,
+        })
+
+    # ──────────────────────────────────────────
+    # Check ①: 转账合计 = 应发工资 + 单位五险一金 + 代理费 + 雇主险
+    # ──────────────────────────────────────────
+    sv = {}
+    for k, idx in K.items():
+        sv[k] = _val(summary_row, idx)
+
+    expected_1 = sv["earnings"] + sv["employer_insure"] + sv["agency_fee"] + sv["liability"]
+    diff_1 = round(sv["transfer_total"] - expected_1, 2)
+    if abs(diff_1) <= tolerance:
+        _add_check("转账合计 = 应发工资 + 单位缴纳五险一金 + 单位代理费 + 雇主责任险",
+                    "row_formula", True)
+    else:
+        _add_check("转账合计 = 应发工资 + 单位缴纳五险一金 + 单位代理费 + 雇主责任险",
+                    "row_formula", False,
+                    f"转账合计 {sv['transfer_total']:.2f} ≠ "
+                    f"{sv['earnings']:.2f}+{sv['employer_insure']:.2f}+"
+                    f"{sv['agency_fee']:.2f}+{sv['liability']:.2f} "
+                    f"= {expected_1:.2f} (差 {diff_1:+.2f})")
+
+    # ──────────────────────────────────────────
+    # Check ②: 转账合计 = 扣款合计 + 个人所得税 + 实发合计
+    # ──────────────────────────────────────────
+    expected_2 = sv["deduction_total"] + sv["personal_tax"] + sv["net_total"]
+    diff_2 = round(sv["transfer_total"] - expected_2, 2)
+    if abs(diff_2) <= tolerance:
+        _add_check("转账合计 = 扣款合计 + 个人所得税 + 实发合计",
+                    "row_formula", True)
+    else:
+        _add_check("转账合计 = 扣款合计 + 个人所得税 + 实发合计",
+                    "row_formula", False,
+                    f"转账合计 {sv['transfer_total']:.2f} ≠ "
+                    f"扣款{sv['deduction_total']:.2f}+个税{sv['personal_tax']:.2f}+"
+                    f"实发{sv['net_total']:.2f} = {expected_2:.2f} (差 {diff_2:+.2f})")
+
+    # ──────────────────────────────────────────
+    # Check ③: 扣款合计 = sum(扣款明细子项)
+    # ──────────────────────────────────────────
+    if deduction_sub_indices and K["deduction_total"] >= 0:
+        sub_sum = round(sum(_val(summary_row, idx) for idx in deduction_sub_indices), 2)
+        ded_val = sv["deduction_total"]
+        diff_3 = round(sub_sum - ded_val, 2)
+        if abs(diff_3) <= tolerance:
+            _add_check("扣款合计 = 扣款明细子项之和", "row_formula", True)
+        else:
+            _add_check("扣款合计 = 扣款明细子项之和", "row_formula", False,
+                        f"子项和 {sub_sum:.2f} ≠ 扣款合计 {ded_val:.2f} (差 {diff_3:+.2f})")
+    elif K["deduction_total"] < 0:
+        _add_check("扣款合计 = 扣款明细子项之和", "row_formula", True,
+                    "（跳过：无扣款合计列）")
+
+    # ──────────────────────────────────────────
+    # Check ④: 列加总校验
+    # ──────────────────────────────────────────
+    col_sum_targets = [
+        ("基本工资", K["base_wage"]),
+        ("补发工资", K["supplement"]),
+        ("应发工资", K["earnings"]),
+        ("单位缴纳五险一金", K["employer_insure"]),
+        ("转账合计", K["transfer_total"]),
+        ("个人所得税", K["personal_tax"]),
+        ("实发合计", K["net_total"]),
+    ]
+    col_sum_failures = 0
+    for label, idx in col_sum_targets:
+        if idx < 0:
+            continue
+        col_total = round(sum(_val(r, idx) for r in range(data_start, data_end + 1)), 2)
+        ref_val = _val(summary_row, idx)
+        diff = round(col_total - ref_val, 2)
+        if abs(diff) > tolerance:
+            col_sum_failures += 1
+            _add_check(f"{label} 列加总", "column_sum", False,
+                        f"数据行合计 {col_total:.2f} ≠ 合计行 {ref_val:.2f} (差 {diff:+.2f})")
+
+    if col_sum_failures == 0:
+        # 只有至少一个目标列成功校验才记录通过
+        checked_cols = [l for l, i in col_sum_targets if i >= 0]
+        if checked_cols:
+            _add_check("列加总校验", "column_sum", True)
+
+    # ──────────────────────────────────────────
+    # Check ⑤: 关键列存在性
+    # ──────────────────────────────────────────
+    critical_missing = []
+    for label, idx_key in [("转账合计", "transfer_total"), ("扣款合计", "deduction_total"),
+                            ("实发合计", "net_total"), ("应发工资", "earnings")]:
+        if K[idx_key] < 0:
+            critical_missing.append(label)
+
+    if critical_missing:
+        _add_check("关键列存在性", "table_format", False,
+                    f"缺失: {'、'.join(critical_missing)}")
+    else:
+        _add_check("关键列存在性", "table_format", True)
+
+    passed_count = sum(1 for c in checks if c["passed"])
+    failed_count = len(checks) - passed_count
+
+    result = {
+        "ok": failed_count == 0,
+        "passed_count": passed_count,
+        "failed_count": failed_count,
+        "checks": checks,
+    }
+
+    # ── 追加验证 sheet ──
+    _append_validation_sheet(wb, checks)
+    wb.save(filepath)
+    wb.close()
+    return result
+
+
+def _append_validation_sheet(wb, checks):
+    """
+    在现有 workbook 中追加「验证结果」sheet，写入校验明细。
+    checks: [{"name", "kind", "passed", "detail"}, ...]
+    """
+    from openpyxl.styles import PatternFill, Font, Alignment
+
+    ws = wb.create_sheet(title="验证结果")
+
+    # Styles
+    green_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+    bold_font = Font(bold=True)
+    title_font = Font(bold=True, size=12)
+
+    # Title
+    ws.cell(row=1, column=1, value="工资表数据验证结果")
+    ws.cell(row=1, column=1).font = title_font
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4)
+
+    # Headers
+    headers = ["#", "校验项", "结果", "说明"]
+    for c, h in enumerate(headers, 1):
+        cell = ws.cell(row=2, column=c, value=h)
+        cell.font = bold_font
+        cell.alignment = Alignment(horizontal="center")
+
+    # Data
+    for i, chk in enumerate(checks, 1):
+        row = i + 2
+        ws.cell(row=row, column=1, value=i)
+        ws.cell(row=row, column=2, value=chk["name"])
+        status = "✅ 通过" if chk["passed"] else "❌ 未通过"
+        ws.cell(row=row, column=3, value=status)
+        ws.cell(row=row, column=4, value=chk.get("detail", ""))
+
+        fill = green_fill if chk["passed"] else red_fill
+        for c in range(1, 5):
+            ws.cell(row=row, column=c).fill = fill
+
+    # Summary row
+    summary_row = len(checks) + 3
+    ws.cell(row=summary_row, column=2, value="汇总")
+    ws.cell(row=summary_row, column=2).font = bold_font
+    passed = sum(1 for c in checks if c["passed"])
+    failed = len(checks) - passed
+    ws.cell(row=summary_row, column=3, value=f"✅ {passed} 项通过" if failed == 0 else f"⚠️ {passed} 项通过, {failed} 项未通过")
+    if failed == 0:
+        ws.cell(row=summary_row, column=3).font = Font(bold=True, color="006100")
+    else:
+        ws.cell(row=summary_row, column=3).font = Font(bold=True, color="9C0006")
+
+    # Column widths
+    ws.column_dimensions["A"].width = 5
+    ws.column_dimensions["B"].width = 45
+    ws.column_dimensions["C"].width = 14
+    ws.column_dimensions["D"].width = 60
+
+
+def _log_validation_results(gui, validation_results):
+    """向 GUI 日志输出验证结果汇总。"""
+    for label in ("有个税", "无个税"):
+        vr = validation_results.get(label)
+        if vr:
+            if vr["ok"]:
+                gui.log(f"  ✅ {label}：全部 {vr['passed_count']} 项校验通过")
+                for chk in vr["checks"]:
+                    if not chk["passed"]:
+                        continue
+                    gui.log(f"    ✓ {chk['name']}")
+            else:
+                gui.log(f"  ⚠️ {label}：{vr['passed_count']}/{vr['passed_count'] + vr['failed_count']} 项通过")
+                for chk in vr["checks"]:
+                    if chk["passed"]:
+                        gui.log(f"    ✓ {chk['name']}")
+                    else:
+                        detail = f" — {chk['detail']}" if chk.get("detail") else ""
+                        gui.log(f"    ✗ {chk['name']}{detail}")
+        elif label in validation_results:
+            gui.log(f"  - {label}：未生成文件")
+
+
 def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     """
     合并所有工资表，按个人所得税>0和=0分成两张表
@@ -1217,6 +1524,21 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     tax_path = write_payroll(tax_group, "有个税")
     no_tax_path = write_payroll(no_tax_group, "无个税")
 
+    # ── 验证 ──
+    validation_results = {}
+    if tax_path:
+        try:
+            validation_results["有个税"] = validate_payroll_xlsx(tax_path, canonical_cols)
+        except Exception as e:
+            validation_results["有个税"] = {"ok": False, "passed_count": 0, "failed_count": 1,
+                                           "checks": [{"name": "验证执行异常", "passed": False, "detail": str(e)}]}
+    if no_tax_path:
+        try:
+            validation_results["无个税"] = validate_payroll_xlsx(no_tax_path, canonical_cols)
+        except Exception as e:
+            validation_results["无个税"] = {"ok": False, "passed_count": 0, "failed_count": 1,
+                                           "checks": [{"name": "验证执行异常", "passed": False, "detail": str(e)}]}
+
     # 生成对应的银行报盘文件
     tax_bank_path = None
     no_tax_bank_path = None
@@ -1274,7 +1596,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         tax_bank_path = write_bank(tax_group, "有个税")
         no_tax_bank_path = write_bank(no_tax_group, "无个税")
 
-    return tax_path, no_tax_path, tax_bank_path, no_tax_bank_path
+    return tax_path, no_tax_path, tax_bank_path, no_tax_bank_path, validation_results
 
 
 # ──────────────────────────────────────────────
@@ -1679,7 +2001,7 @@ class BatchPrintGUI:
         self.log("")
 
         try:
-            tax_path, no_tax_path, tax_bank_path, no_tax_bank_path = merge_payrolls_by_tax(
+            tax_path, no_tax_path, tax_bank_path, no_tax_bank_path, validation_results = merge_payrolls_by_tax(
                 self.payroll_dir, self.output_dir, self.bank_dir
             )
         except Exception as e:
@@ -1698,6 +2020,9 @@ class BatchPrintGUI:
             self.log(f"  ✓ 有个税银行报盘：{os.path.basename(tax_bank_path)}")
         if no_tax_bank_path:
             self.log(f"  ✓ 无个税银行报盘：{os.path.basename(no_tax_bank_path)}")
+
+        # ── 验证结果 ──
+        _log_validation_results(self, validation_results)
 
         # 打印
         self.log("")
@@ -1745,7 +2070,7 @@ class BatchPrintGUI:
         self.log("")
 
         try:
-            tax_path, no_tax_path, tax_bank_path, no_tax_bank_path = merge_payrolls_by_tax(
+            tax_path, no_tax_path, tax_bank_path, no_tax_bank_path, validation_results = merge_payrolls_by_tax(
                 self.payroll_dir, self.output_dir, self.bank_dir
             )
         except Exception as e:
@@ -1764,6 +2089,9 @@ class BatchPrintGUI:
             self.log(f"  ✓ 有个税银行报盘：{os.path.basename(tax_bank_path)}")
         if no_tax_bank_path:
             self.log(f"  ✓ 无个税银行报盘：{os.path.basename(no_tax_bank_path)}")
+
+        # ── 验证结果 ──
+        _log_validation_results(self, validation_results)
 
         self.log("")
         self.log("合并完成，未执行打印。")
