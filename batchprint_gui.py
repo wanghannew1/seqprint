@@ -1499,8 +1499,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         insert_pos = name_col_in_canonical + 1
         canonical_cols.insert(insert_pos, "结算单元")
         for i, (uname, tax_amt, nrow) in enumerate(normalized_data):
-            display_name = uname[4:] if uname.startswith("吉林大学") and len(uname) > 4 else uname
-            nrow.insert(insert_pos, display_name)
+            nrow.insert(insert_pos, uname)
 
     # 删除全零列（从第4列 基本工资 开始检查）
     cols_to_remove = set()
