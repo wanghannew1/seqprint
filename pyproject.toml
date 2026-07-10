@@ -13,8 +13,8 @@ dependencies = [
 [project.scripts]
 batch-print = "batchprint_gui:main"
 
-[tool.uv]
-dev-dependencies = []
+[dependency-groups]
+dev = []
 
 [[tool.uv.index]]
 name = "tuna"

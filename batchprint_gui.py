@@ -2354,10 +2354,10 @@ class ValidationConfigDialog:
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # 绑定鼠标滚轮
+        # 绑定鼠标滚轮（绑定到 dialog，关闭时自动清理）
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        self.dialog.bind("<MouseWheel>", _on_mousewheel)
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.formula_widgets = []
@@ -2585,7 +2585,7 @@ class _FormulaEditDialog:
 
             def _mw(event):
                 canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            canvas.bind_all("<MouseWheel>", _mw)
+            self.dialog.bind("<MouseWheel>", _mw)
 
             self.rhs_entries = []
             rhs_list = formula.get("rhs", [])
