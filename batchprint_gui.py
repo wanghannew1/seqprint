@@ -1827,11 +1827,15 @@ class BatchPrintGUI:
         dir_frame.columnconfigure(2, weight=1)
 
         # ── 按钮区域（目录选择和日志之间） ──
-        btn_frame = tk.Frame(self.root, padx=12, pady=10)
-        btn_frame.pack(fill=tk.X, pady=(4, 0))
+        btn_box = tk.Frame(self.root, padx=12, pady=(10, 4))
+        btn_box.pack(fill=tk.X)
+
+        # 第一行：主要操作 + 验证规则
+        row1 = tk.Frame(btn_box)
+        row1.pack(fill=tk.X, pady=(0, 4))
 
         self.run_all_btn = tk.Button(
-            btn_frame,
+            row1,
             text="执行全部并打印",
             command=self.run_all_and_print,
             bg="#4a90d9",
@@ -1843,7 +1847,7 @@ class BatchPrintGUI:
         self.run_all_btn.pack(side=tk.LEFT, padx=(0, 10))
 
         self.merge_only_btn = tk.Button(
-            btn_frame,
+            row1,
             text="仅合并不打印",
             command=self.run_merge_only,
             bg="#6abf69",
@@ -1854,12 +1858,27 @@ class BatchPrintGUI:
         )
         self.merge_only_btn.pack(side=tk.LEFT)
 
-        # ── 新功能：合并工资表及报盘 ──
-        sep2 = tk.Frame(btn_frame, width=2, bd=1, relief=tk.SUNKEN, height=30)
-        sep2.pack(side=tk.LEFT, padx=10)
+        # 分隔 + 验证规则
+        sep_left = tk.Frame(row1, width=2, bd=1, relief=tk.SUNKEN, height=30)
+        sep_left.pack(side=tk.LEFT, padx=10)
+
+        tk.Button(
+            row1,
+            text="验证规则",
+            command=self._open_validation_config,
+            bg="#95a5a6",
+            fg="white",
+            font=("微软雅黑", 10, "bold"),
+            padx=12,
+            pady=4,
+        ).pack(side=tk.LEFT)
+
+        # 第二行：工资表合并操作
+        row2 = tk.Frame(btn_box)
+        row2.pack(fill=tk.X)
 
         self.merge_payroll_btn = tk.Button(
-            btn_frame,
+            row2,
             text="合并工资表及报盘并打印",
             command=self.run_merge_payroll_and_print,
             bg="#e67e22",
@@ -1871,7 +1890,7 @@ class BatchPrintGUI:
         self.merge_payroll_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         self.merge_payroll_no_print_btn = tk.Button(
-            btn_frame,
+            row2,
             text="合并工资表及报盘不打印",
             command=self.run_merge_payroll_only,
             bg="#9b59b6",
@@ -1881,21 +1900,6 @@ class BatchPrintGUI:
             pady=4,
         )
         self.merge_payroll_no_print_btn.pack(side=tk.LEFT)
-
-        # ── 验证规则配置 ──
-        sep3 = tk.Frame(btn_frame, width=2, bd=1, relief=tk.SUNKEN, height=30)
-        sep3.pack(side=tk.LEFT, padx=10)
-
-        tk.Button(
-            btn_frame,
-            text="验证规则",
-            command=self._open_validation_config,
-            bg="#95a5a6",
-            fg="white",
-            font=("微软雅黑", 10, "bold"),
-            padx=12,
-            pady=4,
-        ).pack(side=tk.LEFT)
 
         # 分隔线
         sep = tk.Frame(self.root, height=2, bd=1, relief=tk.SUNKEN)
