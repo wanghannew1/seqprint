@@ -1522,8 +1522,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     header_rows.append(title_row)
 
     unit_row = [""] * max_output_cols
-    unit_row[0] = "单位"
-    unit_row[1] = "名称：吉林大学"
+    unit_row[0] = "单位\n名称：吉林大学"
     header_rows.append(unit_row)
 
     main_row = []
@@ -1619,7 +1618,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         for r_idx, row in enumerate(header_rows):
             for c_idx, val in enumerate(row):
                 cell = ws.cell(row=r_idx + 1, column=c_idx + 1, value=val)
-                cell.border = thin_border
+                if r_idx >= 2:  # 第 1、2 行（标题/单位）无边框
+                    cell.border = thin_border
                 cell.alignment = center_align
                 cell.font = header_font
 
@@ -1684,21 +1684,12 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         # 标题行 A1:AH1
         ws.merge_cells(f"A1:{title_end_col}1")
 
-        # Row 2（单位信息）：合并连续相同空值单元格
-        start = 1
-        prev = None
-        for c in range(1, max_output_cols + 2):
-            cur = ws.cell(row=2, column=c).value if c <= max_output_cols else None
-            if c > max_output_cols or cur != prev:
-                if prev is not None and c - 1 > start:
-                    try:
-                        col_s = openpyxl.utils.get_column_letter(start)
-                        col_e = openpyxl.utils.get_column_letter(c - 1)
-                        ws.merge_cells(f"{col_s}2:{col_e}2")
-                    except Exception:
-                        pass
-                start = c
-                prev = cur
+        # Row 2（单位信息）：跨列居左显示
+        try:
+            ws.merge_cells(f"A2:{title_end_col}2")
+        except Exception:
+            pass
+        ws.cell(row=2, column=1).alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
 
         # Rows 3-5：按 canonical_cols 规则合并
 
