@@ -1678,30 +1678,88 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         for col, label in sign_labels.items():
             ws.cell(row=sign_row_idx, column=col, value=label)
 
-        # ── 合并单元格 ──
-        for merge_range in canonical_merged:
+        # ── 合并单元格（按规则） ──
+        from collections import defaultdict
+
+        # 标题行 A1:AH1
+        ws.merge_cells(f"A1:{title_end_col}1")
+
+        # Row 2（单位信息）：合并连续相同空值单元格
+        start = 1
+        prev = None
+        for c in range(1, max_output_cols + 2):
+            cur = ws.cell(row=2, column=c).value if c <= max_output_cols else None
+            if c > max_output_cols or cur != prev:
+                if prev is not None and c - 1 > start:
+                    try:
+                        col_s = openpyxl.utils.get_column_letter(start)
+                        col_e = openpyxl.utils.get_column_letter(c - 1)
+                        ws.merge_cells(f"{col_s}2:{col_e}2")
+                    except Exception:
+                        pass
+                start = c
+                prev = cur
+
+        # Rows 3-5：按 canonical_cols 规则合并
+
+        # 收集单层列（不含 "/"）→ {col}3:{col}5 垂直合并
+        single_level_cols = []
+        # 收集双层列（仅 2 段，如 扣款明细/单位代理费）→ {col}4:{col}5 垂直合并
+        two_level_cols = []
+        # Row 3 分组：相同一级名的列 → 水平合并
+        main_groups = defaultdict(list)  # main_name → [col_indices]
+        # Row 4 分组：相同二级名的列 → 水平合并（仅扣款明细区域）
+        sub1_groups = defaultdict(list)  # sub1_name → [col_indices]
+
+        for c_idx, cname in enumerate(canonical_cols, 1):
+            if "/" not in cname:
+                single_level_cols.append(c_idx)
+                main_groups[cname].append(c_idx)
+            else:
+                parts = cname.split("/", 1)
+                main_groups[parts[0]].append(c_idx)
+                sub = parts[1]
+                if "/" in sub:
+                    sub1_groups[sub.split("/")[0]].append(c_idx)
+                else:
+                    sub1_groups[sub].append(c_idx)
+                    two_level_cols.append(c_idx)
+
+        # Row 3：水平合并同组多列
+        for group_cols in main_groups.values():
+            if len(group_cols) > 1:
+                cs = openpyxl.utils.get_column_letter(group_cols[0])
+                ce = openpyxl.utils.get_column_letter(group_cols[-1])
+                try:
+                    ws.merge_cells(f"{cs}3:{ce}3")
+                except Exception:
+                    pass
+
+        # Row 4：水平合并同组多列（sub1）
+        for group_cols in sub1_groups.values():
+            if len(group_cols) > 1:
+                cs = openpyxl.utils.get_column_letter(group_cols[0])
+                ce = openpyxl.utils.get_column_letter(group_cols[-1])
+                try:
+                    ws.merge_cells(f"{cs}4:{ce}4")
+                except Exception:
+                    pass
+
+        # 单层列垂直合并 {col}3:{col}5
+        for c_idx in single_level_cols:
+            cl = openpyxl.utils.get_column_letter(c_idx)
             try:
-                ws.merge_cells(merge_range)
+                ws.merge_cells(f"{cl}3:{cl}5")
             except Exception:
                 pass
 
-        # 合并表头中连续相同值的单元格（行 2 的单位名称 / 行 3-5 的层次表头）
-        for r_offset in range(num_header_rows):
-            rr = r_offset + 1  # 1-based row in sheet
-            start = 1
-            prev = None
-            for c in range(1, max_output_cols + 2):
-                cur = ws.cell(row=rr, column=c).value if c <= max_output_cols else None
-                if c > max_output_cols or cur != prev:
-                    if prev is not None and c - 1 > start:
-                        try:
-                            col_s = openpyxl.utils.get_column_letter(start)
-                            col_e = openpyxl.utils.get_column_letter(c - 1)
-                            ws.merge_cells(f"{col_s}{rr}:{col_e}{rr}")
-                        except Exception:
-                            pass
-                    start = c
-                    prev = cur
+        # 双层列垂直合并 {col}4:{col}5
+        for c_idx in two_level_cols:
+            cl = openpyxl.utils.get_column_letter(c_idx)
+            try:
+                ws.merge_cells(f"{cl}4:{cl}5")
+            except Exception:
+                pass
 
         # ── 行高 ──
         ws.row_dimensions[1].height = 36  # 标题行
