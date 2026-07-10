@@ -1713,17 +1713,27 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         # 标题行 A1:AH1
         ws.merge_cells(f"A1:{title_end_col}1")
 
-        # Row 2（单位信息）：左侧单位名称 + 右侧制表时间
-        split_col = min(22, max_output_cols)  # 左半宽列号
+        # Row 2（单位信息）：左侧单位名称 + 右侧填报时间
+        split_col = min(22, max_output_cols)
         left_end = openpyxl.utils.get_column_letter(split_col)
         try:
             ws.merge_cells(f"A2:{left_end}2")
         except Exception:
             pass
         ws.cell(row=2, column=1).alignment = Alignment(horizontal='left', vertical='center')
-        fill_date_str = f"制表时间：{most_common_fill_date}" if most_common_fill_date else ""
+        # 右侧合并最后 6 列显示填报时间（避免相邻空字符串阻挡文字溢出）
+        right_start = max(split_col + 1, max_output_cols - 5)
+        date_start_letter = openpyxl.utils.get_column_letter(right_start)
+        fill_date_str = f"填报时间：{most_common_fill_date}" if most_common_fill_date else ""
         if fill_date_str:
-            ws.cell(row=2, column=max_output_cols, value=fill_date_str
+            # 先清空，再合并
+            for c in range(right_start, max_output_cols + 1):
+                ws.cell(row=2, column=c).value = None
+            try:
+                ws.merge_cells(f"{date_start_letter}2:{title_end_col}2")
+            except Exception:
+                pass
+            ws.cell(row=2, column=right_start, value=fill_date_str
                    ).alignment = Alignment(horizontal='right', vertical='center')
 
         # Rows 3-5：按 canonical_cols 规则合并
