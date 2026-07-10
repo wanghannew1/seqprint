@@ -932,7 +932,8 @@ def _get_default_validation_config():
                     ["单位代理费"],
                     ["雇主责任险"],
                     ["大病险"]
-                ]
+                ],
+                "check_per_row": true
             },
             {
                 "name": "转账合计 = 扣款合计 + 个人所得税 + 实发合计",
@@ -941,12 +942,14 @@ def _get_default_validation_config():
                     ["扣款明细/扣款合计", "扣款合计"],
                     ["个人所得税"],
                     ["实发合计"]
-                ]
+                ],
+                "check_per_row": true
             },
             {
                 "name": "扣款合计 = 扣款明细子项之和",
                 "lhs": [["扣款明细/扣款合计", "扣款合计"]],
-                "rhs_subtract": True
+                "rhs_subtract": true,
+                "check_per_row": true
             }
         ],
         "column_sum_targets": [
@@ -1084,6 +1087,10 @@ def validate_payroll_xlsx(filepath, canonical_cols, config=None, tolerance=None)
 
     data_start = last_header_row + 1
     data_end = summary_row - 1
+    data_count = max(0, data_end - data_start + 1)
+
+    # 姓名列索引（用于逐行报错时显示员工名）
+    name_col_idx = _col(["姓名"])
 
     checks = []
 
@@ -1093,10 +1100,20 @@ def validate_payroll_xlsx(filepath, canonical_cols, config=None, tolerance=None)
             "passed": passed, "detail": detail,
         })
 
+    def _row_name(r):
+        """获取第 r 行员工姓名"""
+        if name_col_idx >= 0:
+            v = ws.cell(row=r, column=name_col_idx + 1).value
+            return str(v or "").strip()
+        return f"第{r}行"
+
     # ──────────────────────────────────────────
     # Row formula checks (行公式校验)
     # ──────────────────────────────────────────
     for formula in row_formulas:
+        formula_name = formula.get("name", "公式校验")
+        check_per_row = formula.get("check_per_row", False)
+
         if formula.get("rhs_subtract"):
             # 特殊规则：扣款合计 = 所有扣款明细子项之和
             ded_prefix = deduction_cfg.get("prefix", "扣款明细/")
@@ -1115,21 +1132,45 @@ def validate_payroll_xlsx(filepath, canonical_cols, config=None, tolerance=None)
                 and not any(excl in name for excl in ded_exclude)
             ]
 
+            # ── 合计行检查 ──
             if sub_indices and lhs_idx >= 0:
                 sub_sum = round(sum(_val(summary_row, idx) for idx in sub_indices), 2)
                 lhs_val = _val(summary_row, lhs_idx)
                 diff = round(sub_sum - lhs_val, 2)
                 if abs(diff) <= tol:
-                    _add_check(formula.get("name", "扣款合计 = 扣款明细子项之和"), "row_formula", True)
+                    _add_check(formula_name + " (合计行)", "row_formula", True)
                 else:
-                    _add_check(formula.get("name", "扣款合计 = 扣款明细子项之和"), "row_formula", False,
+                    _add_check(formula_name + " (合计行)", "row_formula", False,
                                 f"子项和 {sub_sum:.2f} ≠ 合计 {lhs_val:.2f} (差 {diff:+.2f})")
             elif lhs_idx < 0:
-                _add_check(formula.get("name", "扣款合计 = 扣款明细子项之和"), "row_formula", True,
+                _add_check(formula_name + " (合计行)", "row_formula", True,
                             "（跳过：合计列不存在）")
             else:
-                _add_check(formula.get("name", "扣款合计 = 扣款明细子项之和"), "row_formula", True,
+                _add_check(formula_name + " (合计行)", "row_formula", True,
                             "（跳过：无扣款子项）")
+
+            # ── 逐行检查 ──
+            if check_per_row and sub_indices and lhs_idx >= 0:
+                pass_count = 0
+                fail_count = 0
+                fail_samples = []
+                for r in range(data_start, data_end + 1):
+                    sub_sum_r = round(sum(_val(r, idx) for idx in sub_indices), 2)
+                    lhs_val_r = _val(r, lhs_idx)
+                    d = round(sub_sum_r - lhs_val_r, 2)
+                    if abs(d) <= tol:
+                        pass_count += 1
+                    else:
+                        fail_count += 1
+                        if len(fail_samples) < 3:
+                            fail_samples.append(f"{_row_name(r)}: 子项和{sub_sum_r:.2f}≠{lhs_val_r:.2f}")
+                if fail_count == 0:
+                    _add_check(formula_name + " (逐行)", "per_row", True,
+                                f"{pass_count} 行全部通过")
+                else:
+                    sample_str = " | ".join(fail_samples)
+                    _add_check(formula_name + " (逐行)", "per_row", False,
+                                f"通过 {pass_count} 行，失败 {fail_count} 行 | {sample_str}")
         else:
             # 标准行公式：lhs = sum(rhs)
             lhs_idx = -1
@@ -1150,31 +1191,56 @@ def validate_payroll_xlsx(filepath, canonical_cols, config=None, tolerance=None)
                     rhs_labels.append(kw_list[0])
 
             if lhs_idx < 0:
-                # LHS 列不存在，跳过
-                # 如果所有 RHS 也都不存在，跳过
                 all_rhs_missing = all(idx < 0 for idx in rhs_indices)
                 if all_rhs_missing:
-                    _add_check(formula.get("name", "公式校验"), "row_formula", True,
+                    _add_check(formula_name + " (合计行)", "row_formula", True,
                                 "（跳过：相关列均不存在）")
                 else:
-                    _add_check(formula.get("name", "公式校验"), "row_formula", False,
-                                f"LHS 列不存在")
+                    _add_check(formula_name + " (合计行)", "row_formula", False,
+                                "LHS 列不存在")
                 continue
 
+            # ── 合计行检查 ──
             lhs_val = _val(summary_row, lhs_idx)
             rhs_sum = round(sum(_val(summary_row, idx) for idx in rhs_indices if idx >= 0), 2)
             diff = round(lhs_val - rhs_sum, 2)
 
             if abs(diff) <= tol:
-                _add_check(formula.get("name", "公式校验"), "row_formula", True)
+                _add_check(formula_name + " (合计行)", "row_formula", True)
             else:
-                # 构造详情
                 rhs_parts = []
                 for kw_list, idx in zip(formula.get("rhs", []), rhs_indices):
                     v = _val(summary_row, idx)
                     rhs_parts.append(f"{kw_list[0]}{v:.2f}")
-                _add_check(formula.get("name", "公式校验"), "row_formula", False,
+                _add_check(formula_name + " (合计行)", "row_formula", False,
                             f"{lhs_val:.2f} ≠ {' + '.join(rhs_parts)} = {rhs_sum:.2f} (差 {diff:+.2f})")
+
+            # ── 逐行检查 ──
+            if check_per_row:
+                pass_count = 0
+                fail_count = 0
+                fail_samples = []
+                for r in range(data_start, data_end + 1):
+                    lhs_val_r = _val(r, lhs_idx)
+                    rhs_sum_r = round(sum(_val(r, idx) for idx in rhs_indices if idx >= 0), 2)
+                    d = round(lhs_val_r - rhs_sum_r, 2)
+                    if abs(d) <= tol:
+                        pass_count += 1
+                    else:
+                        fail_count += 1
+                        if len(fail_samples) < 3:
+                            rhs_parts_r = []
+                            for kw_list, idx in zip(formula.get("rhs", []), rhs_indices):
+                                rhs_parts_r.append(f"{_val(r, idx):.2f}")
+                            fail_samples.append(
+                                f"{_row_name(r)}: {lhs_val_r:.2f}≠{' + '.join(rhs_parts_r)}={rhs_sum_r:.2f}")
+                if fail_count == 0:
+                    _add_check(formula_name + " (逐行)", "per_row", True,
+                                f"{pass_count} 行全部通过")
+                else:
+                    sample_str = " | ".join(fail_samples)
+                    _add_check(formula_name + " (逐行)", "per_row", False,
+                                f"通过 {pass_count} 行，失败 {fail_count} 行 | {sample_str}")
 
     # ──────────────────────────────────────────
     # Column sum checks (列加总校验)

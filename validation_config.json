@@ -14,7 +14,8 @@
         ["单位代理费"],
         ["雇主责任险"],
         ["大病险"]
-      ]
+      ],
+      "check_per_row": true
     },
     {
       "name": "转账合计 = 扣款合计 + 个人所得税 + 实发合计",
@@ -23,12 +24,14 @@
         ["扣款明细/扣款合计", "扣款合计"],
         ["个人所得税"],
         ["实发合计"]
-      ]
+      ],
+      "check_per_row": true
     },
     {
       "name": "扣款合计 = 扣款明细子项之和",
       "lhs": [["扣款明细/扣款合计", "扣款合计"]],
-      "rhs_subtract": true
+      "rhs_subtract": true,
+      "check_per_row": true
     }
   ],
   "column_sum_targets": [
