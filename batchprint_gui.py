@@ -914,33 +914,127 @@ def _adjust_merged_range(mrange, delete_1based_set, insert_before_1based=3):
     return f"{col_to_letter(new_from)}{from_row}:{col_to_letter(new_to)}{to_row}"
 
 
-def validate_payroll_xlsx(filepath, canonical_cols, tolerance=0.005):
+def _get_default_validation_config():
+    """返回默认的验证规则配置（内置默认值，无配置文件时使用）。"""
+    return {
+        "tolerance": 0.005,
+        "deduction": {
+            "prefix": "扣款明细/",
+            "exclude_keywords": ["扣款合计", "大病险合计"]
+        },
+        "row_formulas": [
+            {
+                "name": "转账合计 = 应发工资 + 单位缴纳五险一金 + 单位代理费 + 雇主责任险 + 大病险",
+                "lhs": [["转账合计"]],
+                "rhs": [
+                    ["应发工资"],
+                    ["单位缴纳五险一金"],
+                    ["单位代理费"],
+                    ["雇主责任险"],
+                    ["大病险"]
+                ]
+            },
+            {
+                "name": "转账合计 = 扣款合计 + 个人所得税 + 实发合计",
+                "lhs": [["转账合计"]],
+                "rhs": [
+                    ["扣款明细/扣款合计", "扣款合计"],
+                    ["个人所得税"],
+                    ["实发合计"]
+                ]
+            },
+            {
+                "name": "扣款合计 = 扣款明细子项之和",
+                "lhs": [["扣款明细/扣款合计", "扣款合计"]],
+                "rhs_subtract": True
+            }
+        ],
+        "column_sum_targets": [
+            ["基本工资"], ["补发工资"], ["应发工资"],
+            ["单位缴纳五险一金"], ["大病险"],
+            ["转账合计"], ["个人所得税"], ["实发合计"]
+        ],
+        "critical_columns": {
+            "转账合计": ["转账合计"],
+            "扣款合计": ["扣款明细/扣款合计", "扣款合计"],
+            "实发合计": ["实发合计"],
+            "应发工资": ["应发工资"]
+        }
+    }
+
+
+def _load_validation_config(config_file=None):
+    """
+    加载验证规则配置文件。若未指定或文件不存在，返回内置默认配置。
+    """
+    import json
+
+    if config_file is None:
+        config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "validation_config.json")
+
+    if os.path.isfile(config_file):
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            return cfg
+        except Exception as e:
+            print(f"Warning: 无法读取验证配置文件 {config_file}，使用默认配置: {e}")
+
+    return _get_default_validation_config()
+
+
+def _save_validation_config(config, config_file=None):
+    """保存验证规则配置文件。"""
+    import json
+    if config_file is None:
+        config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "validation_config.json")
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+
+
+def validate_payroll_xlsx(filepath, canonical_cols, config=None, tolerance=None):
     """
     验证生成的工资表 xlsx 中合计行数据是否符合公式，并将结果追加为新 sheet。
 
-    校验项:
-      ① 转账合计 = 应发工资 + 单位缴纳五险一金 + 单位代理费 + 雇主责任险
-      ② 转账合计 = 扣款合计 + 个人所得税 + 实发合计
-      ③ 扣款合计 = sum(扣款明细子项)
-      ④ 列加总: sum(数据行) ≈ 合计行 (基本工资、补发工资、应发工资、转账合计、实发合计等)
-      ⑤ 关键列存在性检查
+    校验规则由 config 定义（dict 或配置文件路径），支持：
+      - row_formulas: 行公式校验 (lhs = sum(rhs_plus) - sum(rhs_minus))
+      - column_sum_targets: 列加总校验
+      - critical_columns: 关键列存在性检查
+      - deduction: 扣款子项汇总校验
 
     参数:
       filepath: xlsx 文件路径
       canonical_cols: 规范列名列表 (0-based 顺序)
-      tolerance: 比较容差 (默认 0.005 元, 兼顾浮点舍入)
+      config: 配置 dict、配置文件路径、或 None（使用默认配置）
+      tolerance: 比较容差，若指定则覆盖 config 中的值
 
     返回:
       {"ok": bool, "passed_count": int, "failed_count": int, "checks": [...]}
     """
     from openpyxl.styles import PatternFill, Font, Alignment
 
+    # ── 加载配置 ──
+    if config is None:
+        cfg = _load_validation_config()
+    elif isinstance(config, str):
+        cfg = _load_validation_config(config)
+    elif isinstance(config, dict):
+        cfg = config
+    else:
+        cfg = _load_validation_config()
+
+    tol = tolerance if tolerance is not None else cfg.get("tolerance", 0.005)
+    deduction_cfg = cfg.get("deduction", {})
+    row_formulas = cfg.get("row_formulas", [])
+    col_sum_targets = cfg.get("column_sum_targets", [])
+    critical_columns = cfg.get("critical_columns", {})
+
     wb = openpyxl.load_workbook(filepath)
     ws = wb.active
     nrows = ws.max_row
     ncols = ws.max_column
 
-    # ── 列索引 (0-based) ──
+    # ── 列索引 ──
     col_idx = {name: i for i, name in enumerate(canonical_cols)}
 
     def _col(keywords):
@@ -958,7 +1052,7 @@ def validate_payroll_xlsx(filepath, canonical_cols, tolerance=0.005):
         except (ValueError, TypeError):
             return 0.0
 
-    # ── 找合计行 ──
+    # ── 合计行 ──
     summary_row = None
     for r in range(1, nrows + 1):
         if str(ws.cell(row=r, column=1).value or "").strip() == "合计":
@@ -975,16 +1069,13 @@ def validate_payroll_xlsx(filepath, canonical_cols, tolerance=0.005):
         return {"ok": False, "passed_count": 0, "failed_count": 1,
                 "checks": [{"name": "合计行查找", "passed": False}]}
 
-    # ── 确定表头行数 ──
-    # row1=标题, row2=单位, row3=主表头
-    # row4 若存在非空格则是子表头1, row5 则是子表头2
+    # ── 表头行数 ──
     last_header_row = 3
     for r in [4, 5]:
         if r <= nrows:
             has_content = any(
                 str(ws.cell(row=r, column=c).value or "").strip()
-                for c in range(1, ncols + 1)
-                if c != 1  # ignore 序号 col
+                for c in range(1, ncols + 1) if c != 1
             )
             if has_content:
                 last_header_row = r
@@ -993,30 +1084,6 @@ def validate_payroll_xlsx(filepath, canonical_cols, tolerance=0.005):
 
     data_start = last_header_row + 1
     data_end = summary_row - 1
-    data_count = max(0, data_end - data_start + 1)
-
-    # ── 关键列定位 ──
-    K = {
-        "transfer_total": _col(["转账合计"]),
-        "earnings": _col(["应发工资"]),
-        "employer_insure": _col(["单位缴纳五险一金"]),
-        "agency_fee": _col(["单位代理费"]),
-        "liability": _col(["雇主责任险"]),
-        "deduction_total": _col(["扣款明细/扣款合计", "扣款合计"]),
-        "personal_tax": _col(["个人所得税"]),
-        "net_total": _col(["实发合计"]),
-        "net_pay": _col(["实发工资"]),
-        "base_wage": _col(["基本工资"]),
-        "supplement": _col(["补发工资"]),
-    }
-
-    # ── 扣款明细子项 ──
-    deduction_sub_indices = [
-        idx for name, idx in col_idx.items()
-        if name.startswith("扣款明细/")
-        and "扣款合计" not in name
-        and "大病险合计" not in name
-    ]
 
     checks = []
 
@@ -1027,100 +1094,121 @@ def validate_payroll_xlsx(filepath, canonical_cols, tolerance=0.005):
         })
 
     # ──────────────────────────────────────────
-    # Check ①: 转账合计 = 应发工资 + 单位五险一金 + 代理费 + 雇主险
+    # Row formula checks (行公式校验)
     # ──────────────────────────────────────────
-    sv = {}
-    for k, idx in K.items():
-        sv[k] = _val(summary_row, idx)
+    for formula in row_formulas:
+        if formula.get("rhs_subtract"):
+            # 特殊规则：扣款合计 = 所有扣款明细子项之和
+            ded_prefix = deduction_cfg.get("prefix", "扣款明细/")
+            ded_exclude = deduction_cfg.get("exclude_keywords", ["扣款合计", "大病险合计"])
 
-    expected_1 = sv["earnings"] + sv["employer_insure"] + sv["agency_fee"] + sv["liability"]
-    diff_1 = round(sv["transfer_total"] - expected_1, 2)
-    if abs(diff_1) <= tolerance:
-        _add_check("转账合计 = 应发工资 + 单位缴纳五险一金 + 单位代理费 + 雇主责任险",
-                    "row_formula", True)
-    else:
-        _add_check("转账合计 = 应发工资 + 单位缴纳五险一金 + 单位代理费 + 雇主责任险",
-                    "row_formula", False,
-                    f"转账合计 {sv['transfer_total']:.2f} ≠ "
-                    f"{sv['earnings']:.2f}+{sv['employer_insure']:.2f}+"
-                    f"{sv['agency_fee']:.2f}+{sv['liability']:.2f} "
-                    f"= {expected_1:.2f} (差 {diff_1:+.2f})")
+            lhs_keywords_list = formula.get("lhs", [["扣款明细/扣款合计", "扣款合计"]])
+            lhs_idx = -1
+            for kw_list in lhs_keywords_list:
+                lhs_idx = _col(kw_list)
+                if lhs_idx >= 0:
+                    break
 
-    # ──────────────────────────────────────────
-    # Check ②: 转账合计 = 扣款合计 + 个人所得税 + 实发合计
-    # ──────────────────────────────────────────
-    expected_2 = sv["deduction_total"] + sv["personal_tax"] + sv["net_total"]
-    diff_2 = round(sv["transfer_total"] - expected_2, 2)
-    if abs(diff_2) <= tolerance:
-        _add_check("转账合计 = 扣款合计 + 个人所得税 + 实发合计",
-                    "row_formula", True)
-    else:
-        _add_check("转账合计 = 扣款合计 + 个人所得税 + 实发合计",
-                    "row_formula", False,
-                    f"转账合计 {sv['transfer_total']:.2f} ≠ "
-                    f"扣款{sv['deduction_total']:.2f}+个税{sv['personal_tax']:.2f}+"
-                    f"实发{sv['net_total']:.2f} = {expected_2:.2f} (差 {diff_2:+.2f})")
+            sub_indices = [
+                idx for name, idx in col_idx.items()
+                if name.startswith(ded_prefix)
+                and not any(excl in name for excl in ded_exclude)
+            ]
 
-    # ──────────────────────────────────────────
-    # Check ③: 扣款合计 = sum(扣款明细子项)
-    # ──────────────────────────────────────────
-    if deduction_sub_indices and K["deduction_total"] >= 0:
-        sub_sum = round(sum(_val(summary_row, idx) for idx in deduction_sub_indices), 2)
-        ded_val = sv["deduction_total"]
-        diff_3 = round(sub_sum - ded_val, 2)
-        if abs(diff_3) <= tolerance:
-            _add_check("扣款合计 = 扣款明细子项之和", "row_formula", True)
+            if sub_indices and lhs_idx >= 0:
+                sub_sum = round(sum(_val(summary_row, idx) for idx in sub_indices), 2)
+                lhs_val = _val(summary_row, lhs_idx)
+                diff = round(sub_sum - lhs_val, 2)
+                if abs(diff) <= tol:
+                    _add_check(formula.get("name", "扣款合计 = 扣款明细子项之和"), "row_formula", True)
+                else:
+                    _add_check(formula.get("name", "扣款合计 = 扣款明细子项之和"), "row_formula", False,
+                                f"子项和 {sub_sum:.2f} ≠ 合计 {lhs_val:.2f} (差 {diff:+.2f})")
+            elif lhs_idx < 0:
+                _add_check(formula.get("name", "扣款合计 = 扣款明细子项之和"), "row_formula", True,
+                            "（跳过：合计列不存在）")
+            else:
+                _add_check(formula.get("name", "扣款合计 = 扣款明细子项之和"), "row_formula", True,
+                            "（跳过：无扣款子项）")
         else:
-            _add_check("扣款合计 = 扣款明细子项之和", "row_formula", False,
-                        f"子项和 {sub_sum:.2f} ≠ 扣款合计 {ded_val:.2f} (差 {diff_3:+.2f})")
-    elif K["deduction_total"] < 0:
-        _add_check("扣款合计 = 扣款明细子项之和", "row_formula", True,
-                    "（跳过：无扣款合计列）")
+            # 标准行公式：lhs = sum(rhs)
+            lhs_idx = -1
+            for kw_list in formula.get("lhs", []):
+                lhs_idx = _col(kw_list)
+                if lhs_idx >= 0:
+                    break
+
+            rhs_indices = []
+            rhs_labels = []
+            for kw_list in formula.get("rhs", []):
+                idx = _col(kw_list)
+                if idx >= 0:
+                    rhs_indices.append(idx)
+                    rhs_labels.append(kw_list[0])
+                else:
+                    rhs_indices.append(-1)
+                    rhs_labels.append(kw_list[0])
+
+            if lhs_idx < 0:
+                # LHS 列不存在，跳过
+                # 如果所有 RHS 也都不存在，跳过
+                all_rhs_missing = all(idx < 0 for idx in rhs_indices)
+                if all_rhs_missing:
+                    _add_check(formula.get("name", "公式校验"), "row_formula", True,
+                                "（跳过：相关列均不存在）")
+                else:
+                    _add_check(formula.get("name", "公式校验"), "row_formula", False,
+                                f"LHS 列不存在")
+                continue
+
+            lhs_val = _val(summary_row, lhs_idx)
+            rhs_sum = round(sum(_val(summary_row, idx) for idx in rhs_indices if idx >= 0), 2)
+            diff = round(lhs_val - rhs_sum, 2)
+
+            if abs(diff) <= tol:
+                _add_check(formula.get("name", "公式校验"), "row_formula", True)
+            else:
+                # 构造详情
+                rhs_parts = []
+                for kw_list, idx in zip(formula.get("rhs", []), rhs_indices):
+                    v = _val(summary_row, idx)
+                    rhs_parts.append(f"{kw_list[0]}{v:.2f}")
+                _add_check(formula.get("name", "公式校验"), "row_formula", False,
+                            f"{lhs_val:.2f} ≠ {' + '.join(rhs_parts)} = {rhs_sum:.2f} (差 {diff:+.2f})")
 
     # ──────────────────────────────────────────
-    # Check ④: 列加总校验
+    # Column sum checks (列加总校验)
     # ──────────────────────────────────────────
-    col_sum_targets = [
-        ("基本工资", K["base_wage"]),
-        ("补发工资", K["supplement"]),
-        ("应发工资", K["earnings"]),
-        ("单位缴纳五险一金", K["employer_insure"]),
-        ("转账合计", K["transfer_total"]),
-        ("个人所得税", K["personal_tax"]),
-        ("实发合计", K["net_total"]),
-    ]
     col_sum_failures = 0
-    for label, idx in col_sum_targets:
+    for target_kw_list in col_sum_targets:
+        idx = _col(target_kw_list)
         if idx < 0:
             continue
         col_total = round(sum(_val(r, idx) for r in range(data_start, data_end + 1)), 2)
         ref_val = _val(summary_row, idx)
         diff = round(col_total - ref_val, 2)
-        if abs(diff) > tolerance:
+        label = target_kw_list[0]
+        if abs(diff) > tol:
             col_sum_failures += 1
             _add_check(f"{label} 列加总", "column_sum", False,
                         f"数据行合计 {col_total:.2f} ≠ 合计行 {ref_val:.2f} (差 {diff:+.2f})")
 
-    if col_sum_failures == 0:
-        # 只有至少一个目标列成功校验才记录通过
-        checked_cols = [l for l, i in col_sum_targets if i >= 0]
-        if checked_cols:
-            _add_check("列加总校验", "column_sum", True)
+    if col_sum_failures == 0 and col_sum_targets:
+        _add_check("列加总校验", "column_sum", True)
 
     # ──────────────────────────────────────────
-    # Check ⑤: 关键列存在性
+    # Critical column checks (关键列存在性)
     # ──────────────────────────────────────────
-    critical_missing = []
-    for label, idx_key in [("转账合计", "transfer_total"), ("扣款合计", "deduction_total"),
-                            ("实发合计", "net_total"), ("应发工资", "earnings")]:
-        if K[idx_key] < 0:
-            critical_missing.append(label)
-
-    if critical_missing:
-        _add_check("关键列存在性", "table_format", False,
-                    f"缺失: {'、'.join(critical_missing)}")
-    else:
-        _add_check("关键列存在性", "table_format", True)
+    if critical_columns:
+        missing = []
+        for label, kw_list in critical_columns.items():
+            if _col(kw_list if isinstance(kw_list, list) else [kw_list]) < 0:
+                missing.append(label)
+        if missing:
+            _add_check("关键列存在性", "table_format", False,
+                        f"缺失: {'、'.join(missing)}")
+        else:
+            _add_check("关键列存在性", "table_format", True)
 
     passed_count = sum(1 for c in checks if c["passed"])
     failed_count = len(checks) - passed_count
@@ -1338,6 +1426,19 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             del canonical_cols[c]
             for i in range(len(normalized_data)):
                 del normalized_data[i][2][c]
+
+    # 确保 大病险 在 转账合计 左侧
+    if "转账合计" in canonical_cols and "大病险" in canonical_cols:
+        trans_idx = canonical_cols.index("转账合计")
+        illness_idx = canonical_cols.index("大病险")
+        if illness_idx > trans_idx:
+            canonical_cols.pop(illness_idx)
+            canonical_cols.insert(trans_idx, "大病险")
+            for i in range(len(normalized_data)):
+                val = normalized_data[i][2].pop(illness_idx)
+                normalized_data[i][2].insert(trans_idx, val)
+            # 调整 max_output_cols（后面会重新从 canonical_cols 长度取）
+            # 转账合计公式用的大病险值不变，只是列移动了
 
     tax_group = [d for d in normalized_data if d[1] > 0]
     no_tax_group = [d for d in normalized_data if d[1] == 0]
@@ -1714,6 +1815,21 @@ class BatchPrintGUI:
             pady=4,
         )
         self.merge_payroll_no_print_btn.pack(side=tk.LEFT)
+
+        # ── 验证规则配置 ──
+        sep3 = tk.Frame(btn_frame, width=2, bd=1, relief=tk.SUNKEN, height=30)
+        sep3.pack(side=tk.LEFT, padx=10)
+
+        tk.Button(
+            btn_frame,
+            text="验证规则",
+            command=self._open_validation_config,
+            bg="#95a5a6",
+            fg="white",
+            font=("微软雅黑", 10, "bold"),
+            padx=12,
+            pady=4,
+        ).pack(side=tk.LEFT)
 
         # 分隔线
         sep = tk.Frame(self.root, height=2, bd=1, relief=tk.SUNKEN)
@@ -2098,6 +2214,13 @@ class BatchPrintGUI:
         self.log("=" * 50)
         self._set_busy(False)
 
+    # ── 验证规则配置 ──────────────────────────
+
+    def _open_validation_config(self):
+        """打开验证规则配置对话框"""
+        ValidationConfigDialog(self.root, self.log)
+
+
     # ── 目录检查 ──────────────────────────────
 
     def _check_dirs(self):
@@ -2112,6 +2235,341 @@ class BatchPrintGUI:
             messagebox.showwarning("提示", "请先选择输出目录")
             return False
         return True
+
+
+class ValidationConfigDialog:
+    """验证规则配置对话框"""
+
+    def __init__(self, parent, log_callback=None):
+        self.parent = parent
+        self.log_callback = log_callback
+        self.cfg = _load_validation_config()
+
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("验证规则配置")
+        self.dialog.geometry("700x560")
+        self.dialog.minsize(600, 450)
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+
+        main_frame = tk.Frame(self.dialog, padx=16, pady=12)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        row = 0
+
+        # ── 容差 ──
+        tol_frame = tk.Frame(main_frame)
+        tol_frame.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(tol_frame, text="容差:", width=8, anchor=tk.W).pack(side=tk.LEFT)
+        self.tol_var = tk.StringVar(value=str(self.cfg.get("tolerance", 0.005)))
+        tk.Spinbox(tol_frame, from_=0, to=0.1, increment=0.001,
+                   textvariable=self.tol_var, width=10).pack(side=tk.LEFT)
+
+        # ── 行公式 ──
+        sep = tk.Frame(main_frame, height=1, bd=1, relief=tk.SUNKEN)
+        sep.pack(fill=tk.X, pady=4)
+        tk.Label(main_frame, text="行公式（LHS = RHS 之和）",
+                 font=("微软雅黑", 10, "bold"), anchor=tk.W).pack(fill=tk.X, pady=(4, 4))
+
+        formulas_frame = tk.Frame(main_frame)
+        formulas_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Canvas + Scrollbar for formulas
+        canvas = tk.Canvas(formulas_frame, highlightthickness=0)
+        scrollbar = tk.Scrollbar(formulas_frame, orient=tk.VERTICAL, command=canvas.yview)
+        self.formulas_inner = tk.Frame(canvas)
+
+        self.formulas_inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self.formulas_inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # 绑定鼠标滚轮
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        self.formula_widgets = []
+        self._rebuild_formula_list()
+
+        # ── 公式按钮行 ──
+        btn_row = tk.Frame(main_frame)
+        btn_row.pack(fill=tk.X, pady=4)
+        tk.Button(btn_row, text="编辑选中公式", command=self._edit_selected_formula,
+                  width=14).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(btn_row, text="重置为默认", command=self._reset_formulas,
+                  width=14).pack(side=tk.LEFT)
+
+        # ── 列加总校验 & 关键列 ──
+        sep2 = tk.Frame(main_frame, height=1, bd=1, relief=tk.SUNKEN)
+        sep2.pack(fill=tk.X, pady=6)
+
+        bottom_frame = tk.Frame(main_frame)
+        bottom_frame.pack(fill=tk.X)
+
+        # 左半：列加总
+        left_frame = tk.LabelFrame(bottom_frame, text="列加总校验", padx=8, pady=4)
+        left_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.colsum_vars = {}
+        all_known_cols = [
+            "基本工资", "补发工资", "应发工资", "单位缴纳五险一金",
+            "单位代理费", "雇主责任险", "大病险", "转账合计",
+            "个人所得税", "实发工资", "实发合计",
+        ]
+        existing_targets = [t[0] for t in self.cfg.get("column_sum_targets", [])]
+        for i, col in enumerate(all_known_cols):
+            var = tk.BooleanVar(value=col in existing_targets)
+            self.colsum_vars[col] = var
+            cb = tk.Checkbutton(left_frame, text=col, variable=var)
+            cb.grid(row=i // 2, column=i % 2, sticky=tk.W, padx=4)
+
+        # 右半：关键列
+        right_frame = tk.LabelFrame(bottom_frame, text="关键列（必须存在）", padx=8, pady=4)
+        right_frame.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(8, 0))
+        self.crit_vars = {}
+        all_crit = ["转账合计", "扣款合计", "实发合计", "应发工资"]
+        existing_crit = list(self.cfg.get("critical_columns", {}).keys())
+        for i, col in enumerate(all_crit):
+            var = tk.BooleanVar(value=col in existing_crit)
+            self.crit_vars[col] = var
+            tk.Checkbutton(right_frame, text=col, variable=var).grid(
+                row=i, column=0, sticky=tk.W, padx=4)
+
+        # ── 底部按钮 ──
+        btn_bar = tk.Frame(main_frame)
+        btn_bar.pack(fill=tk.X, pady=(10, 0))
+
+        tk.Button(btn_bar, text="保存", command=self._save_config,
+                  bg="#4a90d9", fg="white", font=("微软雅黑", 10, "bold"),
+                  padx=20, pady=2).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_bar, text="恢复默认", command=self._restore_default,
+                  padx=12, pady=2).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_bar, text="关闭", command=self._on_close,
+                  padx=12, pady=2).pack(side=tk.RIGHT)
+
+        self.dialog.wait_window()
+
+    def _on_close(self):
+        self.dialog.destroy()
+
+    def _rebuild_formula_list(self):
+        for w in self.formula_widgets:
+            w.destroy()
+        self.formula_widgets = []
+        self.selected_formula_idx = tk.IntVar(value=0)
+
+        formulas = self.cfg.get("row_formulas", [])
+        if not formulas:
+            lbl = tk.Label(self.formulas_inner, text="（无公式）", fg="#999")
+            lbl.pack(anchor=tk.W, padx=4, pady=2)
+            self.formula_widgets.append(lbl)
+            return
+
+        for i, f in enumerate(formulas):
+            frame = tk.Frame(self.formulas_inner)
+            frame.pack(fill=tk.X, pady=1)
+
+            name = f.get("name", f"公式{i+1}")
+            if f.get("rhs_subtract"):
+                summary = f"{name}"
+            else:
+                rhs_list = f.get("rhs", [])
+                rhs_parts = [kw[0] if kw else "?" for kw in rhs_list]
+                summary = f"{name}"
+
+            rb = tk.Radiobutton(frame, variable=self.selected_formula_idx,
+                                value=i, anchor=tk.W)
+            rb.pack(side=tk.LEFT)
+
+            lbl = tk.Label(frame, text=summary, anchor=tk.W, font=("微软雅黑", 9))
+            lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            self.formula_widgets.append(frame)
+
+    def _edit_selected_formula(self):
+        idx = self.selected_formula_idx.get()
+        formulas = self.cfg.get("row_formulas", [])
+        if idx < 0 or idx >= len(formulas):
+            return
+        _FormulaEditDialog(self.dialog, self.cfg, idx, self._rebuild_formula_list)
+
+    def _reset_formulas(self):
+        default = _get_default_validation_config()
+        self.cfg["row_formulas"] = default["row_formulas"]
+        self._rebuild_formula_list()
+
+    def _restore_default(self):
+        default = _get_default_validation_config()
+        self.cfg = default
+        self.tol_var.set(str(default["tolerance"]))
+        # Reset checkboxes
+        for col, var in self.colsum_vars.items():
+            var.set(col in [t[0] for t in default.get("column_sum_targets", [])])
+        for col, var in self.crit_vars.items():
+            crit_keys = list(default.get("critical_columns", {}).keys())
+            var.set(col in crit_keys)
+        self._rebuild_formula_list()
+
+    def _save_config(self):
+        # 更新容差
+        try:
+            tol = float(self.tol_var.get())
+            self.cfg["tolerance"] = tol
+        except ValueError:
+            messagebox.showerror("错误", "容差必须是数字", parent=self.dialog)
+            return
+
+        # 更新列加总
+        targets = []
+        for col, var in self.colsum_vars.items():
+            if var.get():
+                targets.append([col])
+        self.cfg["column_sum_targets"] = targets
+
+        # 更新关键列
+        crit = {}
+        for col, var in self.crit_vars.items():
+            if var.get():
+                if col == "扣款合计":
+                    crit[col] = ["扣款明细/扣款合计", "扣款合计"]
+                else:
+                    crit[col] = [col]
+        self.cfg["critical_columns"] = crit
+
+        try:
+            _save_validation_config(self.cfg)
+            if self.log_callback:
+                self.log_callback("  ✓ 验证规则配置已保存")
+            messagebox.showinfo("成功", "验证规则配置已保存", parent=self.dialog)
+        except Exception as e:
+            messagebox.showerror("错误", f"保存失败: {e}", parent=self.dialog)
+
+
+class _FormulaEditDialog:
+    """行公式编辑子对话框"""
+
+    def __init__(self, parent, cfg, formula_idx, on_save_callback):
+        self.cfg = cfg
+        self.formula_idx = formula_idx
+        self.on_save_callback = on_save_callback
+        formula = cfg["row_formulas"][formula_idx]
+
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("编辑公式")
+        self.dialog.geometry("500x400")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+
+        main = tk.Frame(self.dialog, padx=12, pady=10)
+        main.pack(fill=tk.BOTH, expand=True)
+
+        # 公式名称
+        tk.Label(main, text="公式名称:").pack(anchor=tk.W)
+        self.name_var = tk.StringVar(value=formula.get("name", ""))
+        tk.Entry(main, textvariable=self.name_var).pack(fill=tk.X, pady=(0, 8))
+
+        # LHS 关键词
+        tk.Label(main, text="LHS (左侧列关键词, 逗号分隔):").pack(anchor=tk.W)
+        lhs_kw_list = formula.get("lhs", [[""]])
+        lhs_str = ",".join(lhs_kw_list[0]) if lhs_kw_list else ""
+        self.lhs_var = tk.StringVar(value=lhs_str)
+        tk.Entry(main, textvariable=self.lhs_var).pack(fill=tk.X, pady=(0, 8))
+
+        is_subtract = formula.get("rhs_subtract", False)
+
+        if is_subtract:
+            tk.Label(main, text="此公式为扣款子项汇总（自动计算所有子项之和）",
+                     fg="#666").pack(anchor=tk.W, pady=8)
+        else:
+            # RHS 列表
+            tk.Label(main, text="RHS (右侧列, 每行一个关键词列表):",
+                     font=("微软雅黑", 9, "bold")).pack(anchor=tk.W)
+
+            rhs_frame = tk.Frame(main)
+            rhs_frame.pack(fill=tk.BOTH, expand=True)
+
+            canvas = tk.Canvas(rhs_frame, highlightthickness=0)
+            scrollbar = tk.Scrollbar(rhs_frame, orient=tk.VERTICAL, command=canvas.yview)
+            self.rhs_inner = tk.Frame(canvas)
+            self.rhs_inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+            canvas.create_window((0, 0), window=self.rhs_inner, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+            def _mw(event):
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            canvas.bind_all("<MouseWheel>", _mw)
+
+            self.rhs_entries = []
+            rhs_list = formula.get("rhs", [])
+            if not rhs_list:
+                rhs_list = [[""]]
+            for kw_list in rhs_list:
+                self._add_rhs_row(kw_list)
+
+            btn_row = tk.Frame(main)
+            btn_row.pack(fill=tk.X, pady=4)
+            tk.Button(btn_row, text="+ 添加列", command=lambda: self._add_rhs_row([""]),
+                      width=10).pack(side=tk.LEFT, padx=(0, 6))
+            tk.Button(btn_row, text="移除末项", command=self._remove_last_rhs,
+                      width=10).pack(side=tk.LEFT)
+
+        # ── 底部按钮 ──
+        bar = tk.Frame(main)
+        bar.pack(fill=tk.X, pady=(8, 0))
+        tk.Button(bar, text="确定", command=self._save,
+                  bg="#4a90d9", fg="white", padx=16).pack(side=tk.RIGHT, padx=(4, 0))
+        tk.Button(bar, text="取消", command=self.dialog.destroy,
+                  padx=12).pack(side=tk.RIGHT)
+
+        self.dialog.protocol("WM_DELETE_WINDOW", self.dialog.destroy)
+
+    def _add_rhs_row(self, kw_list):
+        frame = tk.Frame(self.rhs_inner)
+        frame.pack(fill=tk.X, pady=1)
+
+        label = tk.Label(frame, text=f"项 {len(self.rhs_entries) + 1}:", width=5, anchor=tk.W)
+        label.pack(side=tk.LEFT)
+
+        entry = tk.Entry(frame)
+        entry.insert(0, ",".join(kw_list))
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+
+        self.rhs_entries.append(entry)
+
+    def _remove_last_rhs(self):
+        if self.rhs_entries:
+            entry = self.rhs_entries.pop()
+            entry.master.destroy()
+
+    def _save(self):
+        formula = self.cfg["row_formulas"][self.formula_idx]
+        formula["name"] = self.name_var.get().strip()
+
+        # 更新 LHS
+        lhs_text = self.lhs_var.get().strip()
+        lhs_kws = [kw.strip() for kw in lhs_text.split(",") if kw.strip()]
+        if lhs_kws:
+            formula["lhs"] = [lhs_kws]
+        else:
+            formula["lhs"] = [[""]]
+
+        if not formula.get("rhs_subtract"):
+            # 更新 RHS
+            rhs = []
+            for entry in self.rhs_entries:
+                text = entry.get().strip()
+                if text:
+                    kws = [kw.strip() for kw in text.split(",") if kw.strip()]
+                    rhs.append(kws if kws else [text])
+            formula["rhs"] = rhs
+
+        self.on_save_callback()
+        self.dialog.destroy()
 
 
 def main():
