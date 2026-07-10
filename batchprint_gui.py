@@ -813,24 +813,30 @@ def _build_column_name_map(headers):
 
 
 def _get_canonical_columns(all_file_columns):
-    """从所有文件的列名构建规范列顺序。
-    以列数最多的文件作为基准，再收集其他文件独有的列追加到末尾。
+    """扫描所有文件，按列在各文件中的典型位置自动排顺序。
     返回: [规范列名, ...] 不包含 部门/岗位/职工号
     """
-    # 找到列数最多的文件作为规范基准
-    longest = max(all_file_columns, key=len)
-    base = [c for c in longest if c not in ("部门", "岗位", "职工号")]
-
-    # 收集其他文件中出现但基准中没有的列名（如 补发工资、雇主责任险）
-    extra_names = []
-    seen = set(base)
+    # 统计每个列名在所有文件中出现的位置
+    pos_map = {}
     for cols in all_file_columns:
-        for c in cols:
-            if c not in ("部门", "岗位", "职工号") and c not in seen:
-                extra_names.append(c)
-                seen.add(c)
+        for i, c in enumerate(cols):
+            if c in ("部门", "岗位", "职工号"):
+                continue
+            if c not in pos_map:
+                pos_map[c] = []
+            pos_map[c].append(i)
 
-    return base + extra_names
+    # 用中位数做主排序，均值做辅排序（处理同中位数的列，如 补发工资 vs 交通补贴）
+    def _median_low(values):
+        s = sorted(values)
+        return s[(len(s) - 1) // 2]
+
+    col_order = {}
+    for c, ps in pos_map.items():
+        col_order[c] = (_median_low(ps), sum(ps) / len(ps))
+
+    result = sorted(col_order.keys(), key=lambda c: col_order[c])
+    return result
 
 
 def _normalize_row_by_names(row, headers, canonical_cols):
