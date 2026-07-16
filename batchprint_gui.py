@@ -2104,51 +2104,54 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     op_log_path = os.path.join(output_dir, f"操作记录_{ts}.xlsx")
     log_wb = openpyxl.Workbook()
 
-    # ---- Sheet 1: 工资表明细 ----
+    # ---- Sheet 1: 工资表与银行报盘（合并） ----
     ws1 = log_wb.active
-    ws1.title = "工资表明细"
+    ws1.title = "工资表与银行报盘"
     ws1.append(["原始工资表文件", "原始行号", "原始单位名称", "姓名", "身份证号", "实发合计",
-                "目标单位（结算单元）", "输出文件", "输出行号", "银行匹配状态", "重名标记", "备注"])
+                "目标单位（结算单元）", "银行账号", "银行户名", "银行金额", "银行类型",
+                "原始报盘文件", "匹配状态", "备注"])
     for pp in payroll_provenance:
         src_file, src_row, unit, name, id_no, total_pay, out_file, out_row, settle_unit = pp
         matched_banks = bank_by_name.get(name.strip(), [])
         if matched_banks:
-            bank_detail = "; ".join(
-                f"{bank_prov[bi][5]}/{bank_prov[bi][1]}:{bank_prov[bi][6]}元"
-                for bi in matched_banks
-            )
-            dup = "⚠ 重名" if len(matched_banks) > 1 else ""
-            status = f"已匹配({len(matched_banks)}条)"
+            bi = matched_banks[0]
+            bp = bank_prov[bi]
+            acct = bp[2]       # 账号
+            acct_name = bp[3]  # 户名
+            amount = bp[4]     # 金额
+            bt = bp[5]         # 银行类型
+            bsrc = bp[0]       # 原始报盘文件
+            if len(matched_banks) > 1:
+                # 重名：追加其他匹配的金额信息到备注
+                extra = "; ".join(f"{bank_prov[b][5]}/{bank_prov[b][4]}元" for b in matched_banks[1:])
+                status = "重名"
+                note = f"另有匹配: {extra}"
+            else:
+                status = "已匹配"
+                note = ""
         else:
-            bank_detail = ""
-            dup = ""
+            acct = acct_name = amount = bt = bsrc = ""
             status = "未匹配"
-        note = dup if dup else (f"银行[{bank_detail}]" if matched_banks else "无对应银行记录")
+            note = "无对应银行记录"
         ws1.append([src_file, src_row, unit, name, id_no, total_pay,
-                    settle_unit, out_file, out_row, status, dup, note])
+                    settle_unit, acct, acct_name, amount, bt, bsrc, status, note])
 
-    # ---- Sheet 2: 银行报盘明细 ----
-    ws2 = log_wb.create_sheet("银行报盘明细")
-    ws2.append(["原始报盘文件", "原始行号", "账号", "户名", "金额", "银行类型", "输出文件", "输出行号"])
-    for bp in bank_prov:
-        ws2.append(list(bp))
-
-    # ---- Sheet 3: 汇总 ----
-    ws3 = log_wb.create_sheet("汇总")
-    ws3.append(["指标", "值"])
-    ws3.append(["填报时间", most_common_fill_date])
-    ws3.append(["操作时间", ts])
-    ws3.append(["结算单元数", unique_unit_count])
-    ws3.append(["工资表总人数", len(payroll_provenance)])
-    ws3.append(["银行报盘总笔数", len(bank_prov)])
-    ws3.append(["银行已匹配人数", sum(1 for pp in payroll_provenance if bank_by_name.get(pp[3].strip(), []))])
-    ws3.append(["银行未匹配人数", sum(1 for pp in payroll_provenance if not bank_by_name.get(pp[3].strip(), []))])
-    ws3.append(["重名人数", sum(1 for bps in bank_by_name.values() if len(bps) > 1)])
-    ws3.append(["输出文件（工资表）", os.path.basename(payroll_path) if payroll_path else ""])
-    ws3.append(["输出文件（报盘）", os.path.basename(bank_path) if bank_path else ""])
+    # ---- Sheet 2: 汇总 ----
+    ws2 = log_wb.create_sheet("汇总")
+    ws2.append(["指标", "值"])
+    ws2.append(["填报时间", most_common_fill_date])
+    ws2.append(["操作时间", ts])
+    ws2.append(["结算单元数", unique_unit_count])
+    ws2.append(["工资表总人数", len(payroll_provenance)])
+    ws2.append(["银行报盘总笔数", len(bank_prov)])
+    ws2.append(["银行已匹配人数", sum(1 for pp in payroll_provenance if bank_by_name.get(pp[3].strip(), []))])
+    ws2.append(["银行未匹配人数", sum(1 for pp in payroll_provenance if not bank_by_name.get(pp[3].strip(), []))])
+    ws2.append(["重名人数", sum(1 for bps in bank_by_name.values() if len(bps) > 1)])
+    ws2.append(["输出文件（工资表）", os.path.basename(payroll_path) if payroll_path else ""])
+    ws2.append(["输出文件（报盘）", os.path.basename(bank_path) if bank_path else ""])
 
     # 列宽自适应
-    for ws in [ws1, ws2, ws3]:
+    for ws in [ws1, ws2]:
         for col_cells in ws.columns:
             max_len = max((len(str(c.value or "")) for c in col_cells), default=8)
             col_letter = openpyxl.utils.get_column_letter(col_cells[0].column)
