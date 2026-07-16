@@ -15,6 +15,18 @@ import xlrd
 
 HEADERS = ["序号", "账户", "户名", "金额", "跨行标识", "行名", "联行行号", "摘要", "备注"]
 
+# 结算单元汇总字段配置
+# 键 → 汇总表显示列名，值 → canonical_cols 中的列名
+# 若某列在工资表中不存在则自动跳过；添加/删除项即可扩展
+# 转账总金额比较特殊，它来自银行报盘侧金额的汇总，不由此处配置
+SETTLE_UNIT_SUMMARY_FIELDS = {
+    "个人所得税": "个人所得税",
+    "个人工会会费": "个人工会会费",
+    "工会经费": "工会经费",
+    "实发合计": "实发合计",
+    "实发工资": "实发工资",
+}
+
 
 def split_filename(filename):
     """
@@ -2309,8 +2321,52 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     ws2.append(["输出文件（工资表）", os.path.basename(payroll_path) if payroll_path else ""])
     ws2.append(["输出文件（报盘）", os.path.basename(bank_path) if bank_path else ""])
 
+    # ---- Sheet 3: 结算单元汇总 ----
+    ws3 = log_wb.create_sheet("结算单元汇总")
+    active_display = []
+    active_canonical = []
+    for disp, col in SETTLE_UNIT_SUMMARY_FIELDS.items():
+        if col in col_name_idx:
+            active_display.append(disp)
+            active_canonical.append(col)
+    header = ["结算单元", *active_display, "人数", "转账总金额"]
+    ws3.append(header)
+    # 按结算单元分组汇总（工资表侧字段）
+    unit_rows = defaultdict(list)
+    for out_row, rec in enumerate(payroll_row_map, 1):
+        data_rec = all_group[out_row - 1]
+        _, _, nrow, _, _ = data_rec
+        su = str(nrow[col_name_idx["结算单元"]]) if "结算单元" in col_name_idx and col_name_idx["结算单元"] < len(nrow) else "（空）"
+        unit_rows[su].append(nrow)
+    # 按结算单元统计银行报盘金额
+    unit_bank_total = defaultdict(float)
+    for pp in payroll_provenance:
+        *_, settle_unit = pp
+        name = pp[3].strip()
+        for bi in bank_by_name.get(name, []):
+            try:
+                unit_bank_total[settle_unit] += float(bank_prov[bi][4] or 0)
+            except (ValueError, TypeError):
+                pass
+    for settle_unit in sorted(unit_rows, key=str):
+        rows = unit_rows[settle_unit]
+        row_data = [settle_unit]
+        for col in active_canonical:
+            idx = col_name_idx[col]
+            total = 0.0
+            for nrow in rows:
+                if idx < len(nrow):
+                    try:
+                        total += float(nrow[idx] or 0)
+                    except (ValueError, TypeError):
+                        pass
+            row_data.append(round(total, 2))
+        row_data.append(len(rows))
+        row_data.append(round(unit_bank_total.get(settle_unit, 0.0), 2))
+        ws3.append(row_data)
+
     # 列宽自适应
-    for ws in [ws1, ws2]:
+    for ws in [ws1, ws2, ws3]:
         for col_cells in ws.columns:
             max_len = max((len(str(c.value or "")) for c in col_cells), default=8)
             col_letter = openpyxl.utils.get_column_letter(col_cells[0].column)
