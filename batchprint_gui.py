@@ -1998,29 +1998,26 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                 max_w = min(max(max_w, 8), 20)
                 ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = max_w
 
-        # ── 签名图片 ──
+        # ── 签名图片（按列排序后依次对应总经理→部长→财务→业务）──
         if sample_images:
             from openpyxl.drawing.image import Image as XLImage
             import io
-            sig_map = {
-                2: 1,    # 总经理签字
-                9: 7,    # 部长签字
-                19: 13,  # 财务审核
-                26: 18,  # 业务审核
-            }
-            for img_data, orig_row, orig_col, width, height in sample_images:
-                out_col = sig_map.get(orig_col)
-                if out_col is None:
-                    continue
+            out_cols = [1, 7, 13, 18]
+            # 按原始列升序排列，保证左→右对应关系（替代固定 sig_map）
+            sorted_imgs = sorted(sample_images, key=lambda x: x[2])
+            TARGET_IMG_H = 64  # px, ≈3个行高高度
+            for (img_data, _orig_row, _orig_col, width, height), out_col in zip(sorted_imgs, out_cols):
                 try:
                     new_img = XLImage(io.BytesIO(img_data))
-                    new_img.width = width
-                    new_img.height = height
+                    scale = TARGET_IMG_H / height if height else 1.0
+                    new_img.width = int(width * scale)
+                    new_img.height = TARGET_IMG_H
                     cell_ref = openpyxl.utils.get_column_letter(out_col) + str(sign_row_idx)
                     new_img.anchor = cell_ref
                     ws.add_image(new_img)
                 except Exception:
                     pass
+            ws.row_dimensions[sign_row_idx].height = 50  # pt, 容纳签名图
 
         wb.save(fpath)
         return fpath, output_row_map
