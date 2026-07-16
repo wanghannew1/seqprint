@@ -15,18 +15,6 @@ import xlrd
 
 HEADERS = ["序号", "账户", "户名", "金额", "跨行标识", "行名", "联行行号", "摘要", "备注"]
 
-# 结算单元汇总字段配置
-# 键 → 汇总表显示列名，值 → canonical_cols 中的列名
-# 若某列在工资表中不存在则自动跳过；添加/删除项即可扩展
-# 转账总金额比较特殊，它来自银行报盘侧金额的汇总，不由此处配置
-SETTLE_UNIT_SUMMARY_FIELDS = {
-    "个人所得税": "个人所得税",
-    "个人工会会费": "个人工会会费",
-    "工会经费": "工会经费",
-    "实发合计": "实发合计",
-    "实发工资": "实发工资",
-}
-
 
 def split_filename(filename):
     """
@@ -1135,6 +1123,37 @@ def _save_validation_config(config, config_file=None):
         config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "validation_config.json")
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+
+
+def _load_summary_config():
+    """加载结算单元汇总字段配置。若文件不存在，返回默认字段列表。"""
+    import json
+    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "summary_config.json")
+    if os.path.isfile(config_file):
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            if isinstance(cfg, dict) and "fields" in cfg:
+                return cfg["fields"]
+            if isinstance(cfg, list):
+                return cfg
+            return _get_default_summary_fields()
+        except Exception as e:
+            print(f"Warning: 无法读取汇总配置 {config_file}，使用默认: {e}")
+    return _get_default_summary_fields()
+
+
+def _save_summary_config(fields):
+    """保存结算单元汇总字段配置。"""
+    import json
+    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "summary_config.json")
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump({"fields": fields}, f, ensure_ascii=False, indent=2)
+
+
+def _get_default_summary_fields():
+    """返回默认的结算单元汇总字段列表。"""
+    return ["个人所得税", "个人工会会费", "工会经费", "实发合计", "实发工资"]
 
 
 def validate_payroll_xlsx(filepath, canonical_cols, config=None, tolerance=None):
@@ -2323,12 +2342,13 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
 
     # ---- Sheet 3: 结算单元汇总 ----
     ws3 = log_wb.create_sheet("结算单元汇总")
+    summary_fields = _load_summary_config()
     active_display = []
     active_canonical = []
-    for disp, col in SETTLE_UNIT_SUMMARY_FIELDS.items():
-        if col in col_name_idx:
-            active_display.append(disp)
-            active_canonical.append(col)
+    for field in summary_fields:
+        if field in col_name_idx:
+            active_display.append(field)
+            active_canonical.append(field)
     header = ["结算单元", *active_display, "人数", "转账总金额"]
     ws3.append(header)
     # 按结算单元分组汇总（工资表侧字段）
@@ -2483,6 +2503,17 @@ class BatchPrintGUI:
             padx=12,
             pady=4,
         ).pack(side=tk.LEFT)
+
+        tk.Button(
+            row1,
+            text="汇总设置",
+            command=self._open_summary_config,
+            bg="#95a5a6",
+            fg="white",
+            font=("微软雅黑", 10, "bold"),
+            padx=12,
+            pady=4,
+        ).pack(side=tk.LEFT, padx=(6, 0))
 
         # 第二行：工资表合并操作
         row2 = tk.Frame(btn_box)
@@ -2956,6 +2987,12 @@ class BatchPrintGUI:
         """打开验证规则配置对话框"""
         ValidationConfigDialog(self.root, self.log)
 
+    # ── 汇总设置 ─────────────────────────────
+
+    def _open_summary_config(self):
+        """打开结算单元汇总设置对话框"""
+        SummaryConfigDialog(self.root, self.log)
+
 
     # ── 目录检查 ──────────────────────────────
 
@@ -3196,6 +3233,105 @@ class ValidationConfigDialog:
             messagebox.showinfo("成功", "验证规则配置已保存", parent=self.dialog)
         except Exception as e:
             messagebox.showerror("错误", f"保存失败: {e}", parent=self.dialog)
+
+
+class SummaryConfigDialog:
+    """结算单元汇总字段配置对话框"""
+
+    def __init__(self, parent, log_callback=None):
+        self.parent = parent
+        self.log_callback = log_callback
+        self.fields = _load_summary_config()
+
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("结算单元汇总设置")
+        self.dialog.transient(parent)
+        self.dialog.resizable(True, True)
+
+        main_frame = tk.Frame(self.dialog, padx=16, pady=12)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(main_frame, text="选择需要在结算单元汇总表中显示的字段：",
+                 font=("微软雅黑", 10, "bold"), anchor=tk.W).pack(fill=tk.X, pady=(0, 8))
+        tk.Label(main_frame, text="仅勾选在工资表中实际存在的列才生效，不存在的列自动跳过。",
+                 font=("微软雅黑", 9), fg="#666", anchor=tk.W).pack(fill=tk.X, pady=(0, 10))
+
+        # 已知列清单
+        all_known_cols = [
+            "基本工资", "补发工资", "应发工资", "单位缴纳五险一金",
+            "单位代理费", "雇主责任险", "大病险", "转账合计",
+            "个人所得税", "个人工会会费", "工会经费",
+            "实发工资", "实发合计", "扣款合计",
+        ]
+
+        # 复选框区域（Canvas + Scrollbar 支持滚动）
+        cbox_frame = tk.Frame(main_frame)
+        cbox_frame.pack(fill=tk.BOTH, expand=True)
+
+        canvas = tk.Canvas(cbox_frame, highlightthickness=0)
+        scrollbar = tk.Scrollbar(cbox_frame, orient=tk.VERTICAL, command=canvas.yview)
+        inner = tk.Frame(canvas)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.check_vars = {}
+        for col in all_known_cols:
+            var = tk.BooleanVar(value=col in self.fields)
+            self.check_vars[col] = var
+            tk.Checkbutton(inner, text=col, variable=var, anchor=tk.W,
+                           font=("微软雅黑", 10)).pack(fill=tk.X, padx=8, pady=1)
+
+        # 底部按钮
+        btn_bar = tk.Frame(main_frame)
+        btn_bar.pack(fill=tk.X, pady=(10, 0))
+
+        tk.Button(btn_bar, text="保存", command=self._save_config,
+                  bg="#4a90d9", fg="white", font=("微软雅黑", 10, "bold"),
+                  padx=20, pady=2).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_bar, text="全选", command=self._select_all,
+                  padx=12, pady=2).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_bar, text="取消全选", command=self._deselect_all,
+                  padx=12, pady=2).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_bar, text="关闭", command=self._on_close,
+                  padx=12, pady=2).pack(side=tk.RIGHT)
+
+        # 居中并显示
+        self.dialog.update_idletasks()
+        w = max(self.dialog.winfo_reqwidth(), 320)
+        h = max(self.dialog.winfo_reqheight(), 420)
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        px = parent.winfo_rootx()
+        py = parent.winfo_rooty()
+        x = px + (pw - w) // 2
+        y = py + (ph - h) // 2
+        self.dialog.geometry(f"{w}x{h}+{max(0,x)}+{max(0,y)}")
+        self.dialog.grab_set()
+        self.dialog.wait_window()
+
+    def _select_all(self):
+        for var in self.check_vars.values():
+            var.set(True)
+
+    def _deselect_all(self):
+        for var in self.check_vars.values():
+            var.set(False)
+
+    def _save_config(self):
+        selected = [col for col, var in self.check_vars.items() if var.get()]
+        try:
+            _save_summary_config(selected)
+            if self.log_callback:
+                self.log_callback(f"  ✓ 结算单元汇总设置已保存（{len(selected)} 个字段）")
+            messagebox.showinfo("成功", "结算单元汇总设置已保存", parent=self.dialog)
+        except Exception as e:
+            messagebox.showerror("错误", f"保存失败: {e}", parent=self.dialog)
+
+    def _on_close(self):
+        self.dialog.destroy()
 
 
 class _FormulaEditDialog:
