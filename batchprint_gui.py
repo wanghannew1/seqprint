@@ -406,9 +406,7 @@ def match_payroll_files(merged_files_list, payroll_dir):
                 # signed_ 中优先选 .xlsx
                 xlsx = [f for f in signed if f.endswith(".xlsx")]
                 matched_file = xlsx[0] if xlsx else signed[0]
-            elif unsigned:
-                xlsx = [f for f in unsigned if f.endswith(".xlsx")]
-                matched_file = xlsx[0] if xlsx else unsigned[0]
+            # 非 signed_ 不视为正式工资表，不匹配
 
         filepath = os.path.join(payroll_dir, matched_file) if matched_file else None
         result.append((merged_name, filepath, unit_name))
