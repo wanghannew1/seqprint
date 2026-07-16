@@ -1583,6 +1583,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     sample_images = None
     fill_dates = []  # 各文件填报时间
     maker_names = []  # 各文件制表人（从表尾签字行提取）
+    file_years_months = []  # 各文件标题中的年月（用于输出标题）
 
     for priority, fname in sorted_files:
         if not fname.startswith("signed_"):
@@ -1634,6 +1635,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                     _m = re.search(r"(\d{4})年(\d{1,2})月", _s)
                     if _m:
                         file_ym = f"{_m.group(1)}年{int(_m.group(2)):02d}月"
+                        if file_ym:
+                            file_years_months.append(file_ym)
                         break
             # 收集制表人
             import re as _re
@@ -1750,16 +1753,17 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             settle_unit_candidates.add(su)
     unique_unit_count = len(settle_unit_candidates)
 
-    # 从填报时间提取年月
+    # 从各文件标题取最多的年月用于输出标题
     import re as _re
     year_month = "2026年06月"  # 兜底
     month_short = "6月"
-    if most_common_fill_date:
-        _m = _re.match(r"(\d{4})-(\d{2})", most_common_fill_date)
-        if _m:
-            y, mo = _m.group(1), _m.group(2)
-            year_month = f"{y}年{mo}月"
-            month_short = f"{int(mo)}月"
+    if file_years_months:
+        from collections import Counter
+        _counter = Counter(file_years_months)
+        year_month = _counter.most_common(1)[0][0]
+        _m2 = _re.match(r"(\d{4})年(\d{2})月", year_month)
+        if _m2:
+            month_short = f"{int(_m2.group(2))}月"
 
     # 智能命名：不同结算单元→吉林大学{count}家{月}，相同→吉林大学{月}
     if unique_unit_count > 1:
