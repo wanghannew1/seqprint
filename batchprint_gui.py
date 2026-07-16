@@ -835,15 +835,33 @@ def _read_payroll_workbook(filepath):
         wb = openpyxl.load_workbook(filepath)
         ws = wb.active
         merged = list(ws.merged_cells.ranges) if ws.merged_cells else []
-        # 从 xlsx zip 中直接读取图片文件（openpyxl 的 img.ref 数据被压缩过，不能直接用）
+        # 从 xlsx zip 中直接读取图片文件（openpyxl 的 img.path 在 3.1.5 中返回错误路径）
         images = []
         if ws._images:
             import zipfile
+            from xml.etree import ElementTree as ET
             try:
                 with zipfile.ZipFile(filepath) as z:
+                    # 解析 drawing rels: rId → 真实图片路径
+                    try:
+                        rels_xml = z.read("xl/drawings/_rels/drawing1.xml.rels")
+                        root = ET.fromstring(rels_xml)
+                        ns = {"r": "http://schemas.openxmlformats.org/package/2006/relationships"}
+                        rid_map = {}
+                        for rel in root.findall("r:Relationship", ns):
+                            rid = rel.get("Id")
+                            target = rel.get("Target", "")
+                            if rid and target:
+                                rid_map[rid] = target.lstrip("/")
+                    except Exception:
+                        rid_map = {}
+
                     for img in ws._images:
                         try:
-                            png_path = img.path.lstrip('/')
+                            embed = img.anchor.pic.blipFill.blip.embed
+                            png_path = rid_map.get(embed)
+                            if not png_path:
+                                png_path = img.path.lstrip("/")  # fallback
                             png_data = z.read(png_path)
                             images.append((png_data, img.anchor._from.row, img.anchor._from.col, img.width, img.height))
                         except Exception:
