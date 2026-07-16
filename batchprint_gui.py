@@ -2710,6 +2710,7 @@ class BatchPrintGUI:
             return
 
         if out_path:
+            self.log(f"  📁 输出目录：{self.output_dir}")
             self.log(f"  ✓ 合并报盘：{os.path.basename(out_path)}（共 {total} 条）")
         else:
             self.log("  ⚠ 未找到可转换的报盘文件")
