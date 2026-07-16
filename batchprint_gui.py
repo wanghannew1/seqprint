@@ -1467,6 +1467,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     同时生成对应的银行报盘文件。
     返回: (payroll_path, bank_path, validation_results, op_log_path)
     """
+    from collections import defaultdict
     output_dir = os.path.normpath(output_dir)
     if bank_dir:
         bank_dir = os.path.normpath(bank_dir)
@@ -2093,7 +2094,6 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         payroll_provenance.append((src_file, src_row, uname, name, id_no, total_pay, payroll_fname, out_row, settle_unit))
 
     # 姓名 → 银行记录索引（一对多，重名可能有多个）
-    from collections import defaultdict
     bank_by_name = defaultdict(list)
     for b_idx, bp in enumerate(bank_prov):
         bank_name = bp[3].strip()  # 户名
