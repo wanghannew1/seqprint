@@ -262,6 +262,7 @@ def convert_bank_format(bank_dir, output_dir):
     """
     bank_dir = os.path.normpath(bank_dir)
     output_dir = os.path.normpath(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
     bank_files = [f for f in os.listdir(bank_dir) if f.lower().endswith(".xls")]
     if not bank_files:
