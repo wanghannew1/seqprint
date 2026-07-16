@@ -1531,8 +1531,10 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             val = str(raw[1]).strip() if len(raw) > 1 and raw[1] else ""
             if not val or val in ("单位",):
                 val = str(raw[0]).strip() if len(raw) > 0 and raw[0] else ""
-            if val.startswith("名称："):
-                val = val[3:]
+            for pfx in ("单位名称：", "名称："):
+                if val.startswith(pfx):
+                    val = val[len(pfx):]
+                    break
             unit_name = val.strip()
             # 收集填报时间
             for cell_val in raw:
