@@ -477,6 +477,15 @@ def print_file(filepath, progress_callback=None):
             ws.PageSetup.FitToPagesTall = 0       # 0=不限制行高页数
             ws.PageSetup.PrintTitleRows = "$1:$5" # 每页重复表头
 
+            # 让含图片的行按内容自动调整行高，避免 PDF 行高压缩
+            try:
+                for _shape in ws.Shapes:
+                    if _shape.Type == 13:  # msoPicture
+                        _row = _shape.TopLeftCell.Row
+                        ws.Rows(_row).RowHeight = 50
+            except Exception:
+                pass
+
             ws.PrintOut()
 
             wb.Close(SaveChanges=False)
