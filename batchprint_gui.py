@@ -464,8 +464,9 @@ def print_file(filepath, progress_callback=None):
     for attempt in range(1, max_retries + 1):
         app = None
         try:
-            app = win32com.client.Dispatch("KET.Application")
+            app = win32com.client.DispatchEx("KET.Application")
             app.Visible = False
+            app.DisplayAlerts = False  # 禁止所有弹窗
 
             wb = app.Workbooks.Open(filepath)
             ws = wb.ActiveSheet
