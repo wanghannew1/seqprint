@@ -2110,6 +2110,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     ws1.append(["原始工资表文件", "原始行号", "原始单位名称", "姓名", "身份证号", "实发合计",
                 "目标单位（结算单元）", "银行账号", "银行户名", "银行金额", "银行类型",
                 "原始报盘文件", "匹配状态", "备注"])
+    # 已匹配 / 未匹配的工资表记录
     for pp in payroll_provenance:
         src_file, src_row, unit, name, id_no, total_pay, out_file, out_row, settle_unit = pp
         matched_banks = bank_by_name.get(name.strip(), [])
@@ -2122,7 +2123,6 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             bt = bp[5]         # 银行类型
             bsrc = bp[0]       # 原始报盘文件
             if len(matched_banks) > 1:
-                # 重名：追加其他匹配的金额信息到备注
                 extra = "; ".join(f"{bank_prov[b][5]}/{bank_prov[b][4]}元" for b in matched_banks[1:])
                 status = "重名"
                 note = f"另有匹配: {extra}"
@@ -2135,6 +2135,14 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             note = "无对应银行记录"
         ws1.append([src_file, src_row, unit, name, id_no, total_pay,
                     settle_unit, acct, acct_name, amount, bt, bsrc, status, note])
+
+    # 银行有但工资表没有的报盘记录
+    payroll_names = set(pp[3].strip() for pp in payroll_provenance)
+    for b_idx, bp in enumerate(bank_prov):
+        bank_name = bp[3].strip()
+        if bank_name and bank_name not in payroll_names:
+            ws1.append(["", "", "", bank_name, "", "",
+                        "", bp[2], bp[3], bp[4], bp[5], bp[0], "银行无对应工资表", ""])
 
     # ---- Sheet 2: 汇总 ----
     ws2 = log_wb.create_sheet("汇总")
