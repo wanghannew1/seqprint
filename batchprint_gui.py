@@ -1983,6 +1983,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             cell = ws.cell(row=sign_row_idx, column=col, value=label)
             if col != 24:  # 制表人无需换行，允许超出
                 cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            else:
+                cell.alignment = Alignment(horizontal='center', vertical='center')
 
         # ── 合并单元格（按规则） ──
         from collections import defaultdict
