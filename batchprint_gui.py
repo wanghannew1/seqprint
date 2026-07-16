@@ -1607,6 +1607,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                 pass
 
         unit_name = ""
+        file_ym = ""
         if len(headers) > 1:
             raw = headers[1]
             # B2（column 1）为实际单位名称；若为空/仅"单位"，回退 A2
@@ -1625,6 +1626,10 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                     m = re.search(r"\d{4}-\d{2}-\d{2}", str(cell_val))
                     if m:
                         fill_dates.append(m.group(0))
+                        # 提取该文件的年月
+                        ym = re.match(r"(\d{4})-(\d{2})", m.group(0))
+                        if ym:
+                            file_ym = f"{ym.group(1)}年{ym.group(2)}月"
             # 收集制表人
             import re as _re
             for _row in (list(headers) + list(footers)):
@@ -1651,7 +1656,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             except (ValueError, TypeError):
                 tax_amt = 0
             source_excel_row = row_idx + 6  # 5 行表头 + 1-based
-            all_data.append((unit_name, tax_amt, row, headers, fname, source_excel_row))
+            all_data.append((unit_name, tax_amt, row, headers, fname, source_excel_row, file_ym))
 
     if not all_data:
         return None, None, {}, None
@@ -1664,10 +1669,10 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     canonical_cols = _get_canonical_columns(all_file_col_names)
     canonical_cols = [c for c in canonical_cols if c not in ("部门", "岗位", "职工号")]
 
-    normalized_data = []  # (unit_name, tax_amt, norm_row, source_file, source_excel_row)
-    for unit_name, tax_amt, row, headers, fname, source_excel_row in all_data:
+    normalized_data = []  # (unit_name, tax_amt, norm_row, source_file, source_excel_row, file_ym)
+    for unit_name, tax_amt, row, headers, fname, source_excel_row, file_ym in all_data:
         norm_row = _normalize_row_by_names(row, headers, canonical_cols)
-        normalized_data.append((unit_name, tax_amt, norm_row, fname, source_excel_row))
+        normalized_data.append((unit_name, tax_amt, norm_row, fname, source_excel_row, file_ym))
 
     name_col_in_canonical = None
     for c, name in enumerate(canonical_cols):
@@ -1678,9 +1683,19 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         insert_pos = name_col_in_canonical + 1
         canonical_cols.insert(insert_pos, "结算单元")
         for i, rec in enumerate(normalized_data):
-            uname, tax_amt, nrow, fname, src_row = rec
+            uname, tax_amt, nrow, fname, src_row, file_ym = rec
             nrow.insert(insert_pos, uname)
-            normalized_data[i] = (uname, tax_amt, nrow, fname, src_row)
+            normalized_data[i] = (uname, tax_amt, nrow, fname, src_row, file_ym)
+
+    # "月份" 列：紧随结算单元之后
+    settle_unit_pos = canonical_cols.index("结算单元") if "结算单元" in canonical_cols else -1
+    if settle_unit_pos >= 0:
+        month_pos = settle_unit_pos + 1
+        canonical_cols.insert(month_pos, "月份")
+        for i, rec in enumerate(normalized_data):
+            uname, tax_amt, nrow, fname, src_row, file_ym = rec
+            nrow.insert(month_pos, file_ym if file_ym else "")
+            normalized_data[i] = (uname, tax_amt, nrow, fname, src_row, file_ym)
 
     # 删除全零列（从第4列 基本工资 开始检查）
     cols_to_remove = set()
