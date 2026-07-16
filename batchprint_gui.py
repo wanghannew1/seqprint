@@ -2268,7 +2268,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         fname_src, src_row, _ = rec
         # 找到对应的原始数据记录
         data_rec = all_group[out_row - 1]
-        uname, _, nrow, src_file, src_row2 = data_rec
+        uname, _, nrow, src_file, src_row2, _ = data_rec
         name = str(nrow[col_name_idx["姓名"]]) if "姓名" in col_name_idx and col_name_idx["姓名"] < len(nrow) else ""
         id_no = str(nrow[col_name_idx["身份证"]]) if "身份证" in col_name_idx and col_name_idx["身份证"] < len(nrow) else ""
         total_pay = nrow[col_name_idx["实发合计"]] if "实发合计" in col_name_idx and col_name_idx["实发合计"] < len(nrow) else ""
@@ -2375,7 +2375,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     unit_rows = defaultdict(list)
     for out_row, rec in enumerate(payroll_row_map, 1):
         data_rec = all_group[out_row - 1]
-        _, _, nrow, _, _ = data_rec
+        _, _, nrow, _, _, _ = data_rec
         su = str(nrow[col_name_idx["结算单元"]]) if "结算单元" in col_name_idx and col_name_idx["结算单元"] < len(nrow) else "（空）"
         unit_rows[su].append(nrow)
     # 按结算单元统计银行报盘金额
