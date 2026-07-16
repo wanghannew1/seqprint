@@ -337,14 +337,11 @@ def convert_bank_format(bank_dir, output_dir):
 def match_payroll_files(merged_files_list, payroll_dir):
     """
     输入：合并后的银行报盘文件列表（已排序）和工资表目录
-    返回：[(merged_filename, payroll_filepath, unit_name), ...]
-    与 merged_files_list 一一对应
-
-    匹配逻辑：
-    - 从合并文件名提取单位名（第一个 '-202606-' 之前的部分）
-    - signed_ 版本优先
-    - 排除 汇总表 和 验证 相关文件
-    - 支持 .xls 格式
+    返回：(matched, unmatched, duplicates, no_signed_list)
+    matched: [(merged_filename, payroll_filepath, unit_name), ...]
+    unmatched: [payroll_filename, ...] — 有工资表但无对应银行报盘的单位
+    duplicates: {unit_name: [filenames, ...], ...}
+    no_signed_list: [(unit_name, unsigned_fname), ...] — 有银行报盘但工资表未签字的单位
     """
     result = []
 
@@ -382,6 +379,7 @@ def match_payroll_files(merged_files_list, payroll_dir):
     # 对每个合并文件进行匹配
     matched_units = set()
     duplicates = {}  # unit_name -> [all matched filenames]
+    no_signed_list = []  # 有银行报盘但工资表未签字的单位
     for merged_name in merged_files_list:
         # 提取单位名：第一个 '-202606-' 之前的部分（去掉序号前缀）
         raw_unit = merged_name.split("-202606-", 1)[0]
@@ -406,7 +404,9 @@ def match_payroll_files(merged_files_list, payroll_dir):
                 # signed_ 中优先选 .xlsx
                 xlsx = [f for f in signed if f.endswith(".xlsx")]
                 matched_file = xlsx[0] if xlsx else signed[0]
-            # 非 signed_ 不视为正式工资表，不匹配
+            elif unsigned:
+                # 非 signed_ 不视为正式工资表，记录到 no_signed_list
+                no_signed_list.append((unit_name, unsigned[0]))
 
         filepath = os.path.join(payroll_dir, matched_file) if matched_file else None
         result.append((merged_name, filepath, unit_name))
@@ -419,7 +419,7 @@ def match_payroll_files(merged_files_list, payroll_dir):
             _, fname = candidates[0]
             unmatched.append(fname)
 
-    return result, unmatched, duplicates
+    return result, unmatched, duplicates, no_signed_list
 
 
 # ──────────────────────────────────────────────
@@ -533,7 +533,8 @@ def batch_print(matched_pairs, progress_callback=None):
 
 
 def generate_report_xlsx(output_dir, renamed, matched, unmatched, duplicates,
-                         merge_warnings=None, success=None, fail=None, fail_list=None):
+                         merge_warnings=None, success=None, fail=None, fail_list=None,
+                         no_signed=None):
     """
     生成合并打印操作记录 xlsx
     renamed: [(new_name, old_name, bank_name, unit_name), ...]
@@ -576,6 +577,18 @@ def generate_report_xlsx(output_dir, renamed, matched, unmatched, duplicates,
     row += 1
     ws.cell(row=row, column=1, value="存在多个工资表的单位数")
     ws.cell(row=row, column=2, value=len(duplicates))
+    row += 1
+    if no_signed:
+        ws.cell(row=row, column=1, value="工资表未签字（无 signed_ 前缀）的单位数")
+        ws.cell(row=row, column=2, value=len(no_signed))
+        row += 1
+        ws.cell(row=row, column=1, value="未签字明细")
+        ws.cell(row=row, column=2, value="单位名称")
+        ws.cell(row=row, column=3, value="工资表文件")
+        for uname, fn in no_signed:
+            row += 1
+            ws.cell(row=row, column=2, value=uname)
+            ws.cell(row=row, column=3, value=fn)
 
     # 建立原始报盘文件查找表：unit_name -> [old_name, ...]
     orig_files = {}
@@ -612,6 +625,7 @@ def generate_report_xlsx(output_dir, renamed, matched, unmatched, duplicates,
             print_status[unit_name] = "未打印"
 
     # ── 明细数据 ──
+    no_signed_units = set(u for u, _ in (no_signed or []))
     for idx, (merged_name, payroll_path, unit_name) in enumerate(matched, 1):
         row += 1
         ws.cell(row=row, column=1, value=idx)
@@ -621,7 +635,13 @@ def generate_report_xlsx(output_dir, renamed, matched, unmatched, duplicates,
         orig_list = orig_files.get(unit_name, [])
         ws.cell(row=row, column=4, value="\n".join(orig_list))
         ws.cell(row=row, column=5, value=os.path.basename(payroll_path) if payroll_path else "")
-        ws.cell(row=row, column=6, value="已匹配" if payroll_path else "未找到")
+        if payroll_path:
+            status_text = "已匹配"
+        elif unit_name in no_signed_units:
+            status_text = "未签字"
+        else:
+            status_text = "未找到"
+        ws.cell(row=row, column=6, value=status_text)
         ws.cell(row=row, column=7, value=print_status.get(unit_name, ""))
         # 备注：重复文件提示
         note = ""
@@ -1534,6 +1554,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     maker_names = []  # 各文件制表人（从表尾签字行提取）
 
     for priority, fname in sorted_files:
+        if not fname.startswith("signed_"):
+            continue  # 未签字工资表不参与合并
         path = os.path.join(payroll_dir, fname)
         headers, data_rows, footers, tax_col = _read_payroll_data(path)
 
@@ -2561,12 +2583,16 @@ class BatchPrintGUI:
         # 步骤 3：匹配工资表
         self.log("【步骤3】匹配工资表文件...")
         try:
-            matched, unmatched, duplicates = match_payroll_files(merged, self.payroll_dir)
+            matched, unmatched, duplicates, no_signed = match_payroll_files(merged, self.payroll_dir)
             matched_count = sum(1 for _, fp, _ in matched if fp is not None)
             self.log(f"  ✓ 匹配完成：{matched_count}/{len(matched)} 匹配成功")
             for merged_name, payroll_path, unit_name in matched:
-                status = f"→ {payroll_path}" if payroll_path else "✗ 未找到匹配"
+                status = f"→ {payroll_path}" if payroll_path else "✗ 未签字"
                 self.log(f"    {unit_name}: {status}")
+            if no_signed:
+                self.log(f"  ⚠ 以下 {len(no_signed)} 个单位工资表未签字（无 signed_ 前缀），不能作为匹配依据：")
+                for uname, fn in no_signed:
+                    self.log(f"    {uname}: {fn}")
             if duplicates:
                 self.log(f"  ⚠ 以下单位存在多个工资表文件，仅使用第一个：")
                 for unit_name, files in duplicates.items():
@@ -2639,7 +2665,8 @@ class BatchPrintGUI:
         try:
             report_path = generate_report_xlsx(
                 self.output_dir, renamed, matched,
-                unmatched, duplicates, merge_warnings, success, fail, fail_list
+                unmatched, duplicates, merge_warnings, success, fail, fail_list,
+                no_signed=no_signed
             )
             self.log(f"  📄 操作记录已保存：{report_path}")
         except Exception as e:
@@ -2686,14 +2713,18 @@ class BatchPrintGUI:
         # 步骤 3：匹配
         self.log("【步骤3】匹配工资表文件...")
         try:
-            matched, unmatched, duplicates = match_payroll_files(merged, self.payroll_dir)
+            matched, unmatched, duplicates, no_signed = match_payroll_files(merged, self.payroll_dir)
             # 文件名已带序号前缀，字典序即正确顺序
             matched.sort(key=lambda x: x[0])
             matched_count = sum(1 for _, fp, _ in matched if fp is not None)
             self.log(f"  ✓ 匹配完成：{matched_count}/{len(matched)} 匹配成功")
             for merged_name, payroll_path, unit_name in matched:
-                status = f"→ {payroll_path}" if payroll_path else "✗ 未找到匹配"
+                status = f"→ {payroll_path}" if payroll_path else "✗ 未签字"
                 self.log(f"    {unit_name}: {status}")
+            if no_signed:
+                self.log(f"  ⚠ 以下 {len(no_signed)} 个单位工资表未签字（无 signed_ 前缀），不能作为匹配依据：")
+                for uname, fn in no_signed:
+                    self.log(f"    {uname}: {fn}")
             if duplicates:
                 self.log(f"  ⚠ 以下单位存在多个工资表文件，仅使用第一个：")
                 for unit_name, files in duplicates.items():
@@ -2715,7 +2746,8 @@ class BatchPrintGUI:
         # 生成操作记录
         try:
             report_path = generate_report_xlsx(
-                self.output_dir, renamed, matched, unmatched, duplicates, merge_warnings
+                self.output_dir, renamed, matched, unmatched, duplicates, merge_warnings,
+                no_signed=no_signed
             )
             self.log(f"  📄 操作记录已保存：{report_path}")
         except Exception as e:
