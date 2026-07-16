@@ -2007,11 +2007,11 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     bank_prov = []
     if bank_dir:
         bank_files = [f for f in os.listdir(bank_dir) if f.lower().endswith(".xls")]
-        bank_map = {}
+        bank_map = defaultdict(list)
         for fname in bank_files:
             try:
                 _, _, unit_name = split_filename(fname)
-                bank_map[unit_name] = fname
+                bank_map[unit_name].append(fname)
             except ValueError:
                 continue
 
@@ -2027,20 +2027,20 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                 unit_name = rec[0]
                 if unit_name in bank_map and unit_name not in seen_units:
                     seen_units.add(unit_name)
-                    bfname = bank_map[unit_name]
-                    bfpath = os.path.join(bank_dir, bfname)
-                    bt = detect_bank_type(bfname)
-                    if bt == "icbc":
-                        rows = _read_icbc_rows(bfpath, [])
-                    elif bt == "ccb":
-                        rows = _read_ccb_rows(bfpath, [])
-                    elif bt == "jlb":
-                        rows = _read_jlb_rows(bfpath, [])
-                    else:
-                        continue
-                    for src_idx, row in enumerate(rows):
-                        src_excel_row = src_idx + 2
-                        all_bank_rows.append((row, bfname, src_excel_row, bt))
+                    for bfname in bank_map[unit_name]:
+                        bfpath = os.path.join(bank_dir, bfname)
+                        bt = detect_bank_type(bfname)
+                        if bt == "icbc":
+                            rows = _read_icbc_rows(bfpath, [])
+                        elif bt == "ccb":
+                            rows = _read_ccb_rows(bfpath, [])
+                        elif bt == "jlb":
+                            rows = _read_jlb_rows(bfpath, [])
+                        else:
+                            continue
+                        for src_idx, row in enumerate(rows):
+                            src_excel_row = src_idx + 2
+                            all_bank_rows.append((row, bfname, src_excel_row, bt))
 
             if not all_bank_rows:
                 return None, []
