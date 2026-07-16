@@ -1517,13 +1517,15 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
 
         if sample_header is None:
             sample_header = headers
-            if fname.startswith("signed_") and fname.endswith(".xlsx"):
-                try:
-                    _, ws, _, _, _, merged, images = _read_payroll_workbook(path)
-                    sample_merged_cells = merged
+
+        # 扫描签名图片（第一个有图片的 signed 文件）
+        if not sample_images and fname.startswith("signed_") and fname.endswith(".xlsx"):
+            try:
+                _, ws, _, _, _, merged, images = _read_payroll_workbook(path)
+                if images:
                     sample_images = images
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
         unit_name = ""
         if len(headers) > 1:
@@ -1744,7 +1746,10 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         ws.page_setup.orientation = 'landscape'
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = 0
-        ws.page_margins.left = 0.5
+        from openpyxl.worksheet.properties import PageSetupProperties
+        ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+        ws.page_setup.paperSize = 9  # A4
+        ws.page_margins.left = 0.3
         ws.page_margins.right = 0.3
         ws.page_margins.top = 0.5
         ws.page_margins.bottom = 0.5
@@ -1987,9 +1992,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         # ── 签名图片 ──
         if sample_images:
             from openpyxl.drawing.image import Image as XLImage
-            from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
             import io
-            # 源列 → 输出列映射（openpyxl _from.col 是 0-based）
             sig_map = {
                 2: 1,    # 总经理签字
                 9: 7,    # 部长签字
@@ -2004,9 +2007,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                     new_img = XLImage(io.BytesIO(img_data))
                     new_img.width = width
                     new_img.height = height
-                    new_anchor = OneCellAnchor()
-                    new_anchor._from = AnchorMarker(col=out_col - 1, row=sign_row_idx - 1)
-                    new_img.anchor = new_anchor
+                    cell_ref = openpyxl.utils.get_column_letter(out_col) + str(sign_row_idx)
+                    new_img.anchor = cell_ref
                     ws.add_image(new_img)
                 except Exception:
                     pass
