@@ -1657,7 +1657,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     else:
         base_name = f"吉林大学{month_short}"
 
-    payroll_fname = f"{base_name}.xlsx"
+    payroll_fname = f"{base_name}工资表.xlsx"
     bank_fname = f"{base_name}报盘.xlsx"
 
     all_group = normalized_data
@@ -1958,7 +1958,31 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             elif cname.startswith("扣款明细"):
                 ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 9
             else:
-                ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = 11
+                # 数值列：取数据最大宽度 + 合计行宽度
+                max_w = 11
+                max_val_w = 0
+                total_val = 0.0
+                has_total = False
+                for rec in group:
+                    row = rec[2]
+                    v = row[c - 1] if c - 1 < len(row) else 0
+                    try:
+                        num = float(v or 0)
+                        val_str = f"{num:.2f}"
+                        val_w = len(val_str)
+                        max_val_w = max(max_val_w, val_w)
+                        total_val += num
+                        has_total = True
+                    except (ValueError, TypeError):
+                        val_str = str(v) if v else ""
+                        max_val_w = max(max_val_w, sum(2 if ord(ch) > 127 else 1 for ch in val_str))
+                if has_total:
+                    total_str = f"{total_val:.2f}"
+                    max_w = max(max_val_w, len(total_str)) + 1
+                else:
+                    max_w = max(max_val_w, 11) + 1
+                max_w = min(max(max_w, 8), 18)
+                ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = max_w
 
         # ── 签名图片 ──
         if sample_images:
