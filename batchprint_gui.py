@@ -260,6 +260,9 @@ def convert_bank_format(bank_dir, output_dir):
     合并为一个报盘，按吉林银行模板格式（代发业务导入模板.xlsx）输出。
     返回: (output_path, total_count) 或 (None, 0)
     """
+    bank_dir = os.path.normpath(bank_dir)
+    output_dir = os.path.normpath(output_dir)
+
     bank_files = [f for f in os.listdir(bank_dir) if f.lower().endswith(".xls")]
     if not bank_files:
         return None, 0
@@ -304,7 +307,7 @@ def convert_bank_format(bank_dir, output_dir):
         yearmon = datetime.now().strftime("%Y%m")
 
     out_name = f"合并报盘_{yearmon}.xlsx"
-    out_path = os.path.join(output_dir, out_name)
+    out_path = os.path.normpath(os.path.join(output_dir, out_name))
 
     tmpl = openpyxl.load_workbook(tmpl_path)
     ws = tmpl["代发工资模板"]
@@ -1463,6 +1466,10 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     同时生成对应的银行报盘文件。
     返回: (payroll_path, bank_path, validation_results, op_log_path)
     """
+    output_dir = os.path.normpath(output_dir)
+    if bank_dir:
+        bank_dir = os.path.normpath(bank_dir)
+    payroll_dir = os.path.normpath(payroll_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     # 扫描工资表
