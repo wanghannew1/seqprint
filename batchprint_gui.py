@@ -462,6 +462,7 @@ def print_file(filepath, progress_callback=None):
 
     max_retries = 3
     for attempt in range(1, max_retries + 1):
+        app = None
         try:
             app = win32com.client.Dispatch("KET.Application")
             app.Visible = False
@@ -480,7 +481,6 @@ def print_file(filepath, progress_callback=None):
             ws.PrintOut()
 
             wb.Close(SaveChanges=False)
-            # 不退出 WPS 应用，保留以备多次打印
 
             return True
 
@@ -492,6 +492,11 @@ def print_file(filepath, progress_callback=None):
             else:
                 return False
         finally:
+            if app is not None:
+                try:
+                    app.Quit()
+                except Exception:
+                    pass
             time.sleep(2.5)
 
 
