@@ -2353,21 +2353,21 @@ class BatchPrintGUI:
     def select_bank_dir(self):
         d = filedialog.askdirectory(title="选择银行报盘目录")
         if d:
-            self.bank_dir = d
-            self.bank_dir_label.config(text=f"银行报盘目录：{d}")
+            self.bank_dir = os.path.normpath(d)
+            self.bank_dir_label.config(text=f"银行报盘目录：{os.path.normpath(d)}")
             self._set_default_output_dir()
 
     def select_payroll_dir(self):
         d = filedialog.askdirectory(title="选择工资表目录")
         if d:
-            self.payroll_dir = d
-            self.payroll_dir_label.config(text=f"工资表目录：{d}")
+            self.payroll_dir = os.path.normpath(d)
+            self.payroll_dir_label.config(text=f"工资表目录：{os.path.normpath(d)}")
 
     def select_output_dir(self):
         d = filedialog.askdirectory(title="选择输出目录")
         if d:
-            self.output_dir = d
-            self.output_dir_label.config(text=f"输出目录：{d}")
+            self.output_dir = os.path.normpath(d)
+            self.output_dir_label.config(text=f"输出目录：{os.path.normpath(d)}")
 
     # ── 进度控制 ──────────────────────────────
 
