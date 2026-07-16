@@ -2220,7 +2220,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     ws1.title = "工资表与银行报盘"
     ws1.append(["原始工资表文件", "原始行号", "原始单位名称", "姓名", "身份证号", "实发合计",
                 "目标单位（结算单元）", "银行账号", "银行户名", "银行金额", "银行类型",
-                "原始报盘文件", "匹配状态", "备注"])
+                "原始报盘文件", "匹配状态", "金额一致", "备注"])
     # 已匹配 / 未匹配的工资表记录
     for pp in payroll_provenance:
         src_file, src_row, unit, name, id_no, total_pay, out_file, out_row, settle_unit = pp
@@ -2233,6 +2233,16 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             amount = bp[4]     # 金额
             bt = bp[5]         # 银行类型
             bsrc = bp[0]       # 原始报盘文件
+            # 金额一致性校验
+            try:
+                pay_val = float(total_pay or 0)
+                bank_val = float(amount or 0)
+                if abs(pay_val - bank_val) < 0.01:
+                    amt_ok = "一致"
+                else:
+                    amt_ok = f"差{pay_val - bank_val:.2f}"
+            except (ValueError, TypeError):
+                amt_ok = "无法比较"
             if len(matched_banks) > 1:
                 extra = "; ".join(f"{bank_prov[b][5]}/{bank_prov[b][4]}元" for b in matched_banks[1:])
                 status = "重名"
@@ -2243,9 +2253,10 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         else:
             acct = acct_name = amount = bt = bsrc = ""
             status = "未匹配"
+            amt_ok = ""
             note = "无对应银行记录"
         ws1.append([src_file, src_row, unit, name, id_no, total_pay,
-                    settle_unit, acct, acct_name, amount, bt, bsrc, status, note])
+                    settle_unit, acct, acct_name, amount, bt, bsrc, status, amt_ok, note])
 
     # 银行有但工资表没有的报盘记录
     payroll_names = set(pp[3].strip() for pp in payroll_provenance)
@@ -2266,6 +2277,15 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     ws2.append(["银行已匹配人数", sum(1 for pp in payroll_provenance if bank_by_name.get(pp[3].strip(), []))])
     ws2.append(["银行未匹配人数", sum(1 for pp in payroll_provenance if not bank_by_name.get(pp[3].strip(), []))])
     ws2.append(["重名人数", sum(1 for bps in bank_by_name.values() if len(bps) > 1)])
+    # 总金额校验
+    try:
+        total_pay = sum(float(pp[5] or 0) for pp in payroll_provenance)
+        total_bank = sum(float(bp[4] or 0) for bp in bank_prov)
+        ws2.append(["工资表总金额", f"{total_pay:.2f}"])
+        ws2.append(["银行报盘总金额", f"{total_bank:.2f}"])
+        ws2.append(["金额差异", f"{total_pay - total_bank:.2f}"])
+    except (ValueError, TypeError):
+        pass
     ws2.append(["输出文件（工资表）", os.path.basename(payroll_path) if payroll_path else ""])
     ws2.append(["输出文件（报盘）", os.path.basename(bank_path) if bank_path else ""])
 
