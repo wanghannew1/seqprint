@@ -2102,8 +2102,11 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                              bt,
                              fname, out_idx - 4))
             last_data_row = 4 + len(all_bank_rows)
-            ws["B2"] = f"=SUM(E5:E{last_data_row})"
-            ws["B3"] = f"=COUNT(A5:A{last_data_row})"
+            # 用计算值替代公式，避免打开时触发保存提示
+            total_amount = sum(float(row[3] or 0) for (row, _, _, _) in all_bank_rows)
+            ws["B2"] = total_amount
+            ws["B2"].number_format = "0.00"
+            ws["B3"] = len(all_bank_rows)
             tmpl.save(fpath)
             return fpath, prov
 
