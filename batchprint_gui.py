@@ -1880,7 +1880,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         }
         for col, label in sign_labels.items():
             cell = ws.cell(row=sign_row_idx, column=col, value=label)
-            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            if col != 24:  # 制表人无需换行，允许超出
+                cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
         # ── 合并单元格（按规则） ──
         from collections import defaultdict
