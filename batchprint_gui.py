@@ -254,6 +254,82 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
     return sorted(merged_files), warnings
 
 
+def convert_bank_format(bank_dir, output_dir):
+    """
+    读取 bank_dir 下所有银行报盘文件（工行/建行/吉林银行），
+    合并为一个报盘，按吉林银行模板格式（代发业务导入模板.xlsx）输出。
+    返回: (output_path, total_count) 或 (None, 0)
+    """
+    bank_files = [f for f in os.listdir(bank_dir) if f.lower().endswith(".xls")]
+    if not bank_files:
+        return None, 0
+
+    all_rows = []
+    warnings = []
+    for fname in sorted(bank_files):
+        fpath = os.path.join(bank_dir, fname)
+        bt = detect_bank_type(fname)
+        if bt == "icbc":
+            rows = _read_icbc_rows(fpath, warnings)
+        elif bt == "ccb":
+            rows = _read_ccb_rows(fpath, warnings)
+        elif bt == "jlb":
+            rows = _read_jlb_rows(fpath, warnings)
+        else:
+            continue
+        all_rows.extend(rows)
+
+    if not all_rows:
+        return None, 0
+
+    for i, row in enumerate(all_rows, 1):
+        row[0] = i
+
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    tmpl_path = os.path.join(_script_dir, "template", "代发业务导入模板.xlsx")
+    if not os.path.exists(tmpl_path):
+        return None, 0
+
+    # 从文件名提取年月做输出文件名
+    yearmon = ""
+    for fname in bank_files:
+        try:
+            y, _, _ = split_filename(fname)
+            yearmon = y
+            break
+        except ValueError:
+            continue
+    if not yearmon:
+        from datetime import datetime
+        yearmon = datetime.now().strftime("%Y%m")
+
+    out_name = f"合并报盘_{yearmon}.xlsx"
+    out_path = os.path.join(output_dir, out_name)
+
+    tmpl = openpyxl.load_workbook(tmpl_path)
+    ws = tmpl["代发工资模板"]
+    ws.title = "合并报盘"
+
+    # 清除示例数据行
+    for r in range(5, 8):
+        for c in range(1, 7):
+            ws.cell(row=r, column=c).value = None
+
+    for out_idx, row in enumerate(all_rows, start=5):
+        ws.cell(row=out_idx, column=1, value=out_idx - 4)
+        ws.cell(row=out_idx, column=2, value=str(row[1]).strip())
+        ws.cell(row=out_idx, column=3, value=str(row[2]).strip())
+        cell_e = ws.cell(row=out_idx, column=5, value=row[3])
+        cell_e.number_format = "0.00"
+
+    last_data_row = 4 + len(all_rows)
+    ws["B2"] = f"=SUM(E5:E{last_data_row})"
+    ws["B3"] = f"=COUNT(A5:A{last_data_row})"
+    tmpl.save(out_path)
+
+    return out_path, len(all_rows)
+
+
 def match_payroll_files(merged_files_list, payroll_dir):
     """
     输入：合并后的银行报盘文件列表（已排序）和工资表目录
@@ -2208,6 +2284,22 @@ class BatchPrintGUI:
         )
         self.merge_payroll_no_print_btn.pack(side=tk.LEFT)
 
+        # 第三行：报盘格式转换
+        row3 = tk.Frame(btn_box)
+        row3.pack(fill=tk.X, pady=(4, 0))
+
+        self.bank_convert_btn = tk.Button(
+            row3,
+            text="报盘格式转换",
+            command=self.run_bank_convert,
+            bg="#8e44ad",
+            fg="white",
+            font=("微软雅黑", 11, "bold"),
+            padx=16,
+            pady=4,
+        )
+        self.bank_convert_btn.pack(side=tk.LEFT, padx=(0, 6))
+
         # 分隔线
         sep = tk.Frame(self.root, height=2, bd=1, relief=tk.SUNKEN)
         sep.pack(fill=tk.X, padx=10, pady=6)
@@ -2582,6 +2674,40 @@ class BatchPrintGUI:
 
         self.log("")
         self.log("合并完成，未执行打印。")
+        self.log("=" * 50)
+        self._set_busy(False)
+
+    # ── 报盘格式转换 ──────────────────────────────
+
+    def run_bank_convert(self):
+        if not self.bank_dir:
+            messagebox.showwarning("提示", "请先选择银行报盘目录")
+            return
+        if not self.output_dir:
+            messagebox.showwarning("提示", "请先选择输出目录")
+            return
+
+        self._set_busy(True)
+        self.log("=" * 50)
+        self.log("开始报盘格式转换...")
+        self.log("")
+
+        try:
+            out_path, total = convert_bank_format(self.bank_dir, self.output_dir)
+        except Exception as e:
+            self.log(f"  ✗ 转换失败：{e}")
+            import traceback
+            self.log(traceback.format_exc())
+            self._set_busy(False)
+            return
+
+        if out_path:
+            self.log(f"  ✓ 合并报盘：{os.path.basename(out_path)}（共 {total} 条）")
+        else:
+            self.log("  ⚠ 未找到可转换的报盘文件")
+
+        self.log("")
+        self.log("转换完成。")
         self.log("=" * 50)
         self._set_busy(False)
 
