@@ -1912,6 +1912,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             except ValueError:
                 continue
 
+        bank_tmpl_path = os.path.join(bank_dir, "吉林银行模板", "代发业务导入模板.xlsx")
+
         def write_bank(group_data, suffix):
             if not group_data:
                 return None, []
@@ -1944,25 +1946,34 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
 
             fname = f"银行报盘_{suffix}_{ts}.xlsx"
             fpath = os.path.join(output_dir, fname)
-            wb = openpyxl.Workbook()
-            ws = wb.active
+            # 使用吉林银行模板
+            tmpl = openpyxl.load_workbook(bank_tmpl_path)
+            ws = tmpl["代发工资模板"]
             ws.title = f"银行报盘_{suffix}"
-            ws.append(HEADERS)
+            # 清除示例数据行（模板第5~7行）
+            for r in range(5, 8):
+                for c in range(1, 7):
+                    ws.cell(row=r, column=c).value = None
             bank_prov = []  # [(src_file, src_row, account, name, amount, bank_type, output_file, output_row), ...]
-            for out_idx, (row, src_file, src_row, bt) in enumerate(all_bank_rows, start=2):
-                for c, val in enumerate(row, start=1):
-                    if val is None or val == "":
-                        continue
-                    cell = ws.cell(row=out_idx, column=c, value=val)
-                    if c == 4:
-                        cell.number_format = "0.00"
+            for out_idx, (row, src_file, src_row, bt) in enumerate(all_bank_rows, start=5):
+                ws.cell(row=out_idx, column=1, value=out_idx - 4)  # A: 序号
+                ws.cell(row=out_idx, column=2, value=str(row[1]).strip())  # B: 收款账号
+                ws.cell(row=out_idx, column=3, value=str(row[2]).strip())  # C: 收款户名
+                # D: 收款银行 — 不填，网银自动识别
+                cell_e = ws.cell(row=out_idx, column=5, value=row[3])  # E: 金额
+                cell_e.number_format = "0.00"
+                # F: 通知收款人 — 留空
                 bank_prov.append((src_file, src_row,
                                   str(row[1]) if len(row) > 1 else "",   # 账号
                                   str(row[2]) if len(row) > 2 else "",   # 户名
                                   str(row[3]) if len(row) > 3 else "",   # 金额
                                   bt,
-                                  fname, out_idx - 1))  # 输出行号
-            wb.save(fpath)
+                                  fname, out_idx - 4))  # 输出行号
+            # 更新汇总公式
+            last_data_row = 4 + len(all_bank_rows)
+            ws["B2"] = f"=SUM(E5:E{last_data_row})"
+            ws["B3"] = f"=COUNT(A5:A{last_data_row})"
+            tmpl.save(fpath)
             return fpath, bank_prov
 
         tax_bank_result = write_bank(tax_group, "有个税")
