@@ -1533,6 +1533,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     sample_merged_cells = None
     sample_images = None
     fill_dates = []  # 各文件填报时间
+    maker_names = []  # 各文件制表人（从表尾签字行提取）
 
     for priority, fname in sorted_files:
         path = os.path.join(payroll_dir, fname)
@@ -1573,6 +1574,15 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                     m = re.search(r"\d{4}-\d{2}-\d{2}", str(cell_val))
                     if m:
                         fill_dates.append(m.group(0))
+            # 收集制表人
+            import re as _re
+            for _row in (list(headers) + list(footers)):
+                for _cv in _row:
+                    _s = str(_cv or "").strip()
+                    if _s.startswith("制表人") and "：" in _s:
+                        _name = _s.split("：", 1)[1].strip()
+                        if _name:
+                            maker_names.append(_name)
 
         if not unit_name:
             # 兜底：从文件名提取
@@ -1855,12 +1865,18 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
 
         # ── 签名行 ──
         sign_row_idx = total_row_idx + 2
+        # 列出所有不重复制表人
+        _unique_makers = []
+        for _n in maker_names:
+            if _n not in _unique_makers:
+                _unique_makers.append(_n)
+        _maker_text = "制表人：" + "、".join(_unique_makers) if _unique_makers else "制表人："
         sign_labels = {
             1: "总经理签字：",
             7: "部长签字：",
             13: "财务审核：",
             18: "业务审核：",
-            24: "制表人：张朦",
+            24: _maker_text,
         }
         for col, label in sign_labels.items():
             ws.cell(row=sign_row_idx, column=col, value=label)
