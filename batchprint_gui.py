@@ -1978,10 +1978,10 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                         max_val_w = max(max_val_w, sum(2 if ord(ch) > 127 else 1 for ch in val_str))
                 if has_total:
                     total_str = f"{total_val:.2f}"
-                    max_w = max(max_val_w, len(total_str)) + 1
+                    max_w = max(max_val_w, len(total_str)) + 3
                 else:
-                    max_w = max(max_val_w, 11) + 1
-                max_w = min(max(max_w, 8), 18)
+                    max_w = max(max_val_w, 11) + 3
+                max_w = min(max(max_w, 8), 20)
                 ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = max_w
 
         # ── 签名图片 ──
@@ -2128,7 +2128,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         if payroll_path:
             new_payroll_path = os.path.join(output_dir, new_payroll)
             try:
-                os.rename(payroll_path, new_payroll_path)
+                os.replace(payroll_path, new_payroll_path)
                 payroll_path = new_payroll_path
                 payroll_fname = new_payroll
             except OSError:
@@ -2136,7 +2136,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         if bank_path:
             new_bank_path = os.path.join(output_dir, new_bank)
             try:
-                os.rename(bank_path, new_bank_path)
+                os.replace(bank_path, new_bank_path)
                 bank_path = new_bank_path
                 bank_fname = new_bank
             except OSError:
