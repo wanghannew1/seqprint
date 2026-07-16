@@ -1929,7 +1929,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             except ValueError:
                 continue
 
-        bank_tmpl_path = os.path.join(bank_dir, "吉林银行模板", "代发业务导入模板.xlsx")
+        bank_tmpl_path = os.path.normpath(os.path.join(bank_dir, "吉林银行模板", "代发业务导入模板.xlsx"))
 
         def write_bank(group_data, fname):
             if not group_data:
