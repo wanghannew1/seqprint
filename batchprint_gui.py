@@ -1879,7 +1879,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             24: _maker_text,
         }
         for col, label in sign_labels.items():
-            ws.cell(row=sign_row_idx, column=col, value=label)
+            cell = ws.cell(row=sign_row_idx, column=col, value=label)
+            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
         # ── 合并单元格（按规则） ──
         from collections import defaultdict
@@ -2036,8 +2037,8 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         if sample_images:
             from openpyxl.drawing.image import Image as XLImage
             import io
-            # 签名字段列 → 图片锚点列（右移两列避开合并单元格）
-            sig_cols = {1: 3, 7: 9, 13: 15, 18: 20}
+            # 签名字段列 → 图片锚点列（右移一列，文字自动换行不溢出故不重叠）
+            sig_cols = {1: 2, 7: 8, 13: 14, 18: 19}
             # 按原始列升序排列，保证左→右对应关系
             sorted_imgs = sorted(sample_images, key=lambda x: x[2])
             TARGET_IMG_H = 64  # px, ≈3个行高高度
