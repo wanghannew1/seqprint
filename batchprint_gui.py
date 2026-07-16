@@ -1965,7 +1965,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             cell.font = Font(bold=True, size=10)
 
         # ── 签名行 ──
-        sign_row_idx = total_row_idx + 2
+        sign_row_idx = total_row_idx + 3
         # 列出所有不重复制表人
         _unique_makers = []
         for _n in maker_names:
