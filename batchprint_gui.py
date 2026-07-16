@@ -1619,17 +1619,22 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                     val = val[len(pfx):]
                     break
             unit_name = val.strip()
-            # 收集填报时间
+            # 收集填报时间（仅用于操作记录）
             for cell_val in raw:
                 if cell_val and "填报时间" in str(cell_val):
                     import re
                     m = re.search(r"\d{4}-\d{2}-\d{2}", str(cell_val))
                     if m:
                         fill_dates.append(m.group(0))
-                        # 提取该文件的年月
-                        ym = re.match(r"(\d{4})-(\d{2})", m.group(0))
-                        if ym:
-                            file_ym = f"{ym.group(1)}年{ym.group(2)}月"
+            # 从标题行提取年月
+            if headers and len(headers) > 0:
+                import re
+                for cell_val in headers[0]:
+                    _s = str(cell_val or "")
+                    _m = re.search(r"(\d{4})年(\d{1,2})月", _s)
+                    if _m:
+                        file_ym = f"{_m.group(1)}年{int(_m.group(2)):02d}月"
+                        break
             # 收集制表人
             import re as _re
             for _row in (list(headers) + list(footers)):
