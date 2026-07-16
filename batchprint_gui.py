@@ -1753,17 +1753,43 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             settle_unit_candidates.add(su)
     unique_unit_count = len(settle_unit_candidates)
 
-    # 从各文件标题取最多的年月用于输出标题
+    # 从各文件标题取所有月份，生成涵盖所有月份的标题
     import re as _re
-    year_month = "2026年06月"  # 兜底
-    month_short = "6月"
-    if file_years_months:
-        from collections import Counter
-        _counter = Counter(file_years_months)
-        year_month = _counter.most_common(1)[0][0]
-        _m2 = _re.match(r"(\d{4})年(\d{2})月", year_month)
-        if _m2:
-            month_short = f"{int(_m2.group(2))}月"
+    _all_ym = set()
+    for _ym in file_years_months:
+        _m3 = _re.match(r"(\d{4})年(\d{2})月", _ym)
+        if _m3:
+            _all_ym.add((int(_m3.group(1)), int(_m3.group(2))))
+    _sorted_ym = sorted(_all_ym)
+
+    if _sorted_ym:
+        # 按年分组
+        from itertools import groupby
+        _title_parts = []
+        _all_month_nums = []
+        for _yr, _grp in groupby(_sorted_ym, key=lambda x: x[0]):
+            _mons = sorted(m for _, m in _grp)
+            _all_month_nums.extend(_mons)
+            if len(_mons) == 1:
+                _title_parts.append(f"{_yr}年{_mons[0]}月")
+            elif all(_mons[i] + 1 == _mons[i+1] for i in range(len(_mons)-1)):
+                _title_parts.append(f"{_yr}年{_mons[0]}-{_mons[-1]}月")
+            else:
+                _title_parts.append(f"{_yr}年{'、'.join(str(m) for m in _mons)}月")
+        year_month = "".join(_title_parts)
+
+        # 文件名用短格式
+        if len(_sorted_ym) == 1:
+            month_short = f"{_sorted_ym[0][1]}月"
+        else:
+            _flat = sorted(set(_all_month_nums))
+            if all(_flat[i] + 1 == _flat[i+1] for i in range(len(_flat)-1)):
+                month_short = f"{_flat[0]}-{_flat[-1]}月"
+            else:
+                month_short = '_'.join(str(m) for m in _flat) + "月"
+    else:
+        year_month = "2026年06月"
+        month_short = "6月"
 
     # 智能命名：不同结算单元→吉林大学{count}家{月}，相同→吉林大学{月}
     if unique_unit_count > 1:
