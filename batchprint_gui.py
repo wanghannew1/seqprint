@@ -1998,15 +1998,16 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                 max_w = min(max(max_w, 8), 20)
                 ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = max_w
 
-        # ── 签名图片（按列排序后依次对应总经理→部长→财务→业务）──
+        # ── 签名图片（按左侧签名字段右移一列放置）──
         if sample_images:
             from openpyxl.drawing.image import Image as XLImage
             import io
-            out_cols = [1, 7, 13, 18]
-            # 按原始列升序排列，保证左→右对应关系（替代固定 sig_map）
+            # 签名字段列 → 图片锚点列（右移一列避免与文字重叠）
+            sig_cols = {1: 2, 7: 8, 13: 14, 18: 19}
+            # 按原始列升序排列，保证左→右对应关系
             sorted_imgs = sorted(sample_images, key=lambda x: x[2])
             TARGET_IMG_H = 64  # px, ≈3个行高高度
-            for (img_data, _orig_row, _orig_col, width, height), out_col in zip(sorted_imgs, out_cols):
+            for (img_data, _orig_row, _orig_col, width, height), out_col in zip(sorted_imgs, sig_cols.values()):
                 try:
                     new_img = XLImage(io.BytesIO(img_data))
                     scale = TARGET_IMG_H / height if height else 1.0
