@@ -2103,6 +2103,45 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         bank_path = bank_result[0] if bank_result else None
         bank_prov = bank_result[1] if bank_result else []
 
+        # 重命名文件：追加人数/笔数和总金额
+        # 从 canonical_cols 找实发合计的列索引
+        pay_col = next((i for i, n in enumerate(canonical_cols) if n == "实发合计"), None)
+        payroll_total = 0.0
+        if pay_col is not None:
+            for rec in all_group:
+                nrow = rec[2]
+                try:
+                    payroll_total += float(nrow[pay_col] or 0)
+                except (ValueError, TypeError, IndexError):
+                    pass
+
+        bank_total = 0.0
+        for bp in bank_prov:
+            try:
+                bank_total += float(bp[4] or 0)
+            except (ValueError, TypeError):
+                pass
+
+        new_payroll = f"{base_name}工资表_{len(payroll_row_map)}人_{payroll_total:.2f}元.xlsx"
+        new_bank = f"{base_name}报盘_{len(bank_prov)}笔_{bank_total:.2f}元.xlsx"
+
+        if payroll_path:
+            new_payroll_path = os.path.join(output_dir, new_payroll)
+            try:
+                os.rename(payroll_path, new_payroll_path)
+                payroll_path = new_payroll_path
+                payroll_fname = new_payroll
+            except OSError:
+                pass
+        if bank_path:
+            new_bank_path = os.path.join(output_dir, new_bank)
+            try:
+                os.rename(bank_path, new_bank_path)
+                bank_path = new_bank_path
+                bank_fname = new_bank
+            except OSError:
+                pass
+
     # ── 构建操作记录 ──
     col_name_idx = {n: i for i, n in enumerate(canonical_cols)}
     payroll_provenance = []  # [(src_file, src_row, unit, name, id_num, total_pay, out_file, out_row, settle_unit), ...]
