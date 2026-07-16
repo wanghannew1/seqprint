@@ -469,12 +469,12 @@ def print_file(filepath, progress_callback=None):
             wb = app.Workbooks.Open(filepath)
             ws = wb.ActiveSheet
 
-            # 页面设置：A4 横向 + 所有列缩放到一页 + 每页重复表头
+            # WPS 页面设置：A4 横向 + 所有列缩放到一页 + 每页重复表头
             ws.PageSetup.Orientation = 2          # xlLandscape
             ws.PageSetup.PaperSize = 9            # xlPaperA4
-            ws.PageSetup.Zoom = False             # 启用 FitToPages（关闭百分比缩放）
+            ws.PageSetup.Zoom = 0                 # 0=启用缩放到页（禁用百分比缩放）
             ws.PageSetup.FitToPagesWide = 1       # 所有列缩放到一页宽
-            ws.PageSetup.FitToPagesTall = False   # 行高自适应
+            ws.PageSetup.FitToPagesTall = 0       # 0=不限制行高页数
             ws.PageSetup.PrintTitleRows = "$1:$5" # 每页重复表头
 
             ws.PrintOut()
