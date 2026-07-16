@@ -486,8 +486,11 @@ def print_file(filepath, progress_callback=None):
             return True
 
         except Exception as e:
+            import traceback as _tb
+            err_detail = f"{type(e).__name__}: {e}"
             if progress_callback:
-                progress_callback(f"打印失败 (第{attempt}次): {e}")
+                progress_callback(f"打印失败 (第{attempt}次): {err_detail}")
+                progress_callback(f"  traceback: {_tb.format_exc()[:500]}")
             if attempt < max_retries:
                 time.sleep(5)
             else:
@@ -521,7 +524,7 @@ def batch_print(matched_pairs, progress_callback=None):
         if progress_callback:
             progress_callback(i + 1, total, f"正在打印: {unit_name}")
 
-        ok = print_file(payroll_filepath)
+        ok = print_file(payroll_filepath, progress_callback)
         if ok:
             success_count += 1
         else:
