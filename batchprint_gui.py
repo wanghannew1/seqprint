@@ -1800,11 +1800,25 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
         year_month = "2026年06月"
         month_short = "6月"
 
-    # 智能命名：不同结算单元→吉林大学{count}家{月}，相同→吉林大学{月}
+    # 从结算单元名称中提取公共前缀作为单位基名
+    def _common_prefix(strings):
+        if not strings:
+            return ""
+        first = min(strings)
+        last = max(strings)
+        for i, (a, b) in enumerate(zip(first, last)):
+            if a != b:
+                return first[:i]
+        return first
+
+    settle_unit_names = sorted(settle_unit_candidates)
+    org_prefix = _common_prefix(settle_unit_names) if settle_unit_names else "吉林大学"
+
+    # 智能命名：不同结算单元→{基名}{count}家{月}，相同→{基名}{月}
     if unique_unit_count > 1:
-        base_name = f"吉林大学{unique_unit_count}家{month_short}"
+        base_name = f"{org_prefix}{unique_unit_count}家{month_short}"
     else:
-        base_name = f"吉林大学{month_short}"
+        base_name = f"{org_prefix}{month_short}"
 
     payroll_fname = f"{base_name}工资表.xlsx"
     bank_fname = f"{base_name}报盘.xlsx"
@@ -1815,11 +1829,11 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
 
     header_rows = []
     title_row = [""] * max_output_cols
-    title_row[0] = f"吉林大学{year_month}人才派遣人员工资发放表"
+    title_row[0] = f"{org_prefix}{year_month}人才派遣人员工资发放表"
     header_rows.append(title_row)
 
     unit_row = [""] * max_output_cols
-    unit_row[0] = "单位名称：吉林大学"
+    unit_row[0] = f"单位名称：{org_prefix}"
     header_rows.append(unit_row)
 
     main_row = []
