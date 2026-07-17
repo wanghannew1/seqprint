@@ -3313,40 +3313,129 @@ class SummaryConfigDialog:
         main_frame.pack(fill=tk.BOTH, expand=True)
 
         tk.Label(main_frame, text="选择需要在结算单元汇总表中显示的字段：",
-                 font=("微软雅黑", 10, "bold"), anchor=tk.W).pack(fill=tk.X, pady=(0, 8))
-        tk.Label(main_frame, text="仅勾选在工资表中实际存在的列才生效，不存在的列自动跳过。",
-                 font=("微软雅黑", 9), fg="#666", anchor=tk.W).pack(fill=tk.X, pady=(0, 10))
+                 font=("微软雅黑", 10, "bold"), anchor=tk.W).pack(fill=tk.X, pady=(0, 4))
+        tk.Label(main_frame, text="勾选预设列或在下方输入自定义列名（工资表中实际存在的列才生效，不存在的自动跳过）",
+                 font=("微软雅黑", 9), fg="#666", anchor=tk.W).pack(fill=tk.X, pady=(0, 8))
 
-        # 已知列清单
+        # ── 预设列复选框 ──
+        preset_frame = tk.LabelFrame(main_frame, text="预设列", padx=8, pady=4)
+        preset_frame.pack(fill=tk.X, pady=(0, 8))
+
         all_known_cols = [
             "基本工资", "补发工资", "应发工资", "单位缴纳五险一金",
             "单位代理费", "雇主责任险", "大病险", "转账合计",
             "个人所得税", "个人工会会费", "工会经费",
             "实发工资", "实发合计", "扣款合计",
         ]
-
-        # 复选框区域（Canvas + Scrollbar 支持滚动）
-        cbox_frame = tk.Frame(main_frame)
-        cbox_frame.pack(fill=tk.BOTH, expand=True)
-
-        canvas = tk.Canvas(cbox_frame, highlightthickness=0)
-        scrollbar = tk.Scrollbar(cbox_frame, orient=tk.VERTICAL, command=canvas.yview)
-        inner = tk.Frame(canvas)
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
         self.check_vars = {}
-        for col in all_known_cols:
+        for i, col in enumerate(all_known_cols):
             var = tk.BooleanVar(value=col in self.fields)
             self.check_vars[col] = var
-            tk.Checkbutton(inner, text=col, variable=var, anchor=tk.W,
-                           font=("微软雅黑", 10)).pack(fill=tk.X, padx=8, pady=1)
+            tk.Checkbutton(preset_frame, text=col, variable=var, anchor=tk.W,
+                           font=("微软雅黑", 9)).grid(row=i // 4, column=i % 4, sticky=tk.W, padx=6, pady=1)
 
-        # 底部按钮
+        # ── 自定义列 ──
+        custom_frame = tk.LabelFrame(main_frame, text="自定义列", padx=8, pady=4)
+        custom_frame.pack(fill=tk.X, pady=(0, 8))
+
+        entry_row = tk.Frame(custom_frame)
+        entry_row.pack(fill=tk.X, pady=(0, 4))
+        self.custom_entry = tk.Entry(entry_row, font=("微软雅黑", 10))
+        self.custom_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self.custom_entry.bind("<Return>", lambda e: self._add_custom())
+        tk.Button(entry_row, text="添加", command=self._add_custom,
+                  font=("微软雅黑", 9), padx=10).pack(side=tk.RIGHT)
+
+        # 已添加的自定义列标签
+        self.custom_tags_frame = tk.Frame(custom_frame)
+        self.custom_tags_frame.pack(fill=tk.X)
+        self.custom_items = [c for c in self.fields if c not in all_known_cols]
+        self._rebuild_custom_tags()
+
+        # ── 底部按钮 ──
         btn_bar = tk.Frame(main_frame)
+        btn_bar.pack(fill=tk.X, pady=(10, 0))
+
+        tk.Button(btn_bar, text="保存", command=self._save_config,
+                  bg="#4a90d9", fg="white", font=("微软雅黑", 10, "bold"),
+                  padx=20, pady=2).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_bar, text="全选", command=self._select_all,
+                  padx=12, pady=2).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_bar, text="取消全选", command=self._deselect_all,
+                  padx=12, pady=2).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_bar, text="关闭", command=self._on_close,
+                  padx=12, pady=2).pack(side=tk.RIGHT)
+
+        # 居中并显示
+        self.dialog.update_idletasks()
+        w = max(self.dialog.winfo_reqwidth(), 460)
+        h = max(self.dialog.winfo_reqheight(), 400)
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        px = parent.winfo_rootx()
+        py = parent.winfo_rooty()
+        x = px + (pw - w) // 2
+        y = py + (ph - h) // 2
+        self.dialog.geometry(f"{w}x{h}+{max(0,x)}+{max(0,y)}")
+        self.dialog.grab_set()
+        self.dialog.wait_window()
+
+    def _add_custom(self):
+        name = self.custom_entry.get().strip()
+        if not name:
+            return
+        if name in self.custom_items:
+            messagebox.showinfo("提示", f"「{name}」已在列表中", parent=self.dialog)
+            return
+        self.custom_items.append(name)
+        self.custom_entry.delete(0, tk.END)
+        self._rebuild_custom_tags()
+
+    def _rebuild_custom_tags(self):
+        for w in self.custom_tags_frame.winfo_children():
+            w.destroy()
+        if not self.custom_items:
+            tk.Label(self.custom_tags_frame, text="（无，在输入框中输入列名后点击添加）",
+                     fg="#999", font=("微软雅黑", 9)).pack(anchor=tk.W, padx=4, pady=2)
+            return
+        for item in self.custom_items:
+            tag = tk.Frame(self.custom_tags_frame, bd=1, relief=tk.RIDGE, padx=4, pady=1)
+            tag.pack(side=tk.LEFT, padx=3, pady=2)
+            tk.Label(tag, text=item, font=("微软雅黑", 9)).pack(side=tk.LEFT)
+            tk.Label(tag, text=" ×", fg="red", font=("微软雅黑", 9, "bold"),
+                     cursor="hand2").pack(side=tk.LEFT, padx=(4, 0))
+            # 用 lambda 绑定删除
+            tag.bind("<Button-1>", lambda e, x=item: self._remove_custom(x))
+            # 让标签内所有子部件也响应点击
+            for child in tag.winfo_children():
+                child.bind("<Button-1>", lambda e, x=item: self._remove_custom(x))
+
+    def _remove_custom(self, name):
+        if name in self.custom_items:
+            self.custom_items.remove(name)
+            self._rebuild_custom_tags()
+
+    def _select_all(self):
+        for var in self.check_vars.values():
+            var.set(True)
+
+    def _deselect_all(self):
+        for var in self.check_vars.values():
+            var.set(False)
+
+    def _save_config(self):
+        selected = [col for col, var in self.check_vars.items() if var.get()]
+        selected.extend(self.custom_items)
+        try:
+            _save_summary_config(selected)
+            if self.log_callback:
+                self.log_callback(f"  ✓ 结算单元汇总设置已保存（{len(selected)} 个字段）")
+            messagebox.showinfo("成功", "结算单元汇总设置已保存", parent=self.dialog)
+        except Exception as e:
+            messagebox.showerror("错误", f"保存失败: {e}", parent=self.dialog)
+
+    def _on_close(self):
+        self.dialog.destroy()
         btn_bar.pack(fill=tk.X, pady=(10, 0))
 
         tk.Button(btn_bar, text="保存", command=self._save_config,
