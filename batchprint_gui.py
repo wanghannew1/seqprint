@@ -1545,11 +1545,12 @@ def _log_validation_results(gui, validation_results):
             gui.log(f"  - {label}：未生成文件")
 
 
-def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
+def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None, selected_title=None):
     """
     合并所有工资表为一张表，不再按个税分表。
     智能命名：不同结算单元→{名}{count}家{月}，相同→{名}{月}。
     同时生成对应的银行报盘文件。
+    selected_title: 用户选择的输出标题（不含年月替换），None 则自动取最众数
     返回: (payroll_path, bank_path, validation_results, op_log_path)
     """
     from collections import defaultdict
@@ -1593,6 +1594,7 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     fill_dates = []  # 各文件填报时间
     maker_names = []  # 各文件制表人（从表尾签字行提取）
     file_years_months = []  # 各文件标题中的年月（用于输出标题）
+    file_titles = []  # 各文件标题行原文
 
     for priority, fname in sorted_files:
         if not fname.startswith("signed_"):
@@ -1636,11 +1638,13 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
                     m = re.search(r"\d{4}-\d{2}-\d{2}", str(cell_val))
                     if m:
                         fill_dates.append(m.group(0))
-            # 从标题行提取年月
+            # 从标题行提取年月，并收集标题原文用作输出模板
             if headers and len(headers) > 0:
                 import re
                 for cell_val in headers[0]:
                     _s = str(cell_val or "")
+                    if _s and _s not in ("None",):
+                        file_titles.append(_s)
                     _m = re.search(r"(\d{4})年(\d{1,2})月", _s)
                     if _m:
                         file_ym = f"{_m.group(1)}年{int(_m.group(2)):02d}月"
@@ -1780,9 +1784,9 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
             _mons = sorted(m for _, m in _grp)
             _all_month_nums.extend(_mons)
             if len(_mons) == 1:
-                _title_parts.append(f"{_yr}年{_mons[0]}月")
+                _title_parts.append(f"{_yr}年{_mons[0]:02d}月")
             elif all(_mons[i] + 1 == _mons[i+1] for i in range(len(_mons)-1)):
-                _title_parts.append(f"{_yr}年{_mons[0]}-{_mons[-1]}月")
+                _title_parts.append(f"{_yr}年{_mons[0]:02d}-{_mons[-1]:02d}月")
             else:
                 _title_parts.append(f"{_yr}年{'、'.join(str(m) for m in _mons)}月")
         year_month = "".join(_title_parts)
@@ -1828,8 +1832,24 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     max_output_cols = len(canonical_cols)
 
     header_rows = []
+
+    # 输出标题：用户选定的 → 替换年月；未选定 → 自动构造
+    import re
+    if selected_title:
+        output_title = re.sub(r'\d{4}年\d{1,2}月', year_month, selected_title)
+    elif file_titles:
+        # 取最众数标题中的后缀（年月之后的部分），与 org_prefix + year_month 拼接
+        from collections import Counter
+        _common_title = Counter(file_titles).most_common(1)[0][0]
+        _re_suffix = re.search(r'\d{4}年\d{1,2}月(.+)$', _common_title)
+        if _re_suffix:
+            output_title = f"{org_prefix}{year_month}{_re_suffix.group(1)}"
+        else:
+            output_title = f"{org_prefix}{year_month}人才派遣人员工资发放表"
+    else:
+        output_title = f"{org_prefix}{year_month}人才派遣人员工资发放表"
     title_row = [""] * max_output_cols
-    title_row[0] = f"{org_prefix}{year_month}人才派遣人员工资发放表"
+    title_row[0] = output_title
     header_rows.append(title_row)
 
     unit_row = [""] * max_output_cols
@@ -2472,8 +2492,116 @@ def merge_payrolls_by_tax(payroll_dir, output_dir, bank_dir=None):
     return payroll_path, bank_path, validation_results, op_log_path
 
 
-# ──────────────────────────────────────────────
-# GUI 界面
+# ── 标题选择对话框 ──────────────────────────────────
+
+def _choose_title_dialog(root, title_options, subtitle=""):
+    """
+    弹窗让用户选择输出标题。
+    title_options: [(display_text, full_title), ...]
+    return: 选中的 full_title，或 None（取消）
+    """
+    dlg = tk.Toplevel(root)
+    dlg.title("选择输出标题")
+    dlg.transient(root)
+    dlg.grab_set()
+    dlg.resizable(False, False)
+
+    w, h = 640, 400
+    sw = dlg.winfo_screenwidth()
+    sh = dlg.winfo_screenheight()
+    dlg.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+
+    tk.Label(dlg, text="检测到多个不同的工资表标题，请选择输出标题：",
+             font=("微软雅黑", 11), wraplength=600, justify="left").pack(pady=(15, 5))
+    if subtitle:
+        tk.Label(dlg, text=subtitle, font=("微软雅黑", 9), fg="gray",
+                 wraplength=600, justify="left").pack(pady=(0, 10))
+
+    result = [None]
+
+    frame = tk.Frame(dlg)
+    frame.pack(fill="both", expand=True, padx=15, pady=5)
+
+    canvas = tk.Canvas(frame, highlightthickness=0)
+    scrollbar = tk.Scrollbar(frame, orient="vertical", command=canvas.yview)
+    scrollable = tk.Frame(canvas)
+
+    scrollable.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas.create_window((0, 0), window=scrollable, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    var = tk.StringVar(value="")
+
+    # 按频次降序排列
+    from collections import Counter
+    counts = Counter(t[1] for t in title_options)
+    sorted_opts = sorted(set((t[1], t[0]) for t in title_options),
+                         key=lambda x: (-counts[x[0]], title_options.index((x[1], x[0]))))
+
+    radiobuttons = []
+    for full_title, display_text in sorted_opts:
+        cnt = counts.get(full_title, 0)
+        label = f"【{cnt} 个文件】{full_title}" if cnt > 1 else full_title
+        rb = tk.Radiobutton(scrollable, text=label, variable=var,
+                            value=full_title, wraplength=560, anchor="w",
+                            justify="left", font=("微软雅黑", 10))
+        rb.pack(fill="x", padx=10, pady=3)
+        radiobuttons.append(rb)
+
+    if radiobuttons:
+        radiobuttons[0].select()
+
+    scrollbar.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+
+    btn_frame = tk.Frame(dlg)
+    btn_frame.pack(fill="x", padx=15, pady=(5, 15))
+
+    def on_ok():
+        result[0] = var.get()
+        dlg.destroy()
+
+    def on_cancel():
+        dlg.destroy()
+
+    tk.Button(btn_frame, text="确定", width=10, command=on_ok,
+              font=("微软雅黑", 10)).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="取消", width=10, command=on_cancel,
+              font=("微软雅黑", 10)).pack(side="right", padx=5)
+
+    dlg.update()
+    canvas.configure(scrollregion=canvas.bbox("all"))
+    dlg.wait_window()
+
+    return result[0]
+
+
+def scan_file_titles(payroll_dir):
+    """
+    快速扫描 signed_ 工资表，返回所有文件标题行原文。
+    return: list of (display_label, full_title_string)
+    """
+    if not os.path.isdir(payroll_dir):
+        return []
+
+    titles = []
+    for fname in sorted(os.listdir(payroll_dir)):
+        if not fname.startswith("signed_") or not fname.endswith(".xlsx") or fname.startswith("~$"):
+            continue
+        path = os.path.join(payroll_dir, fname)
+        try:
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            ws = wb.active
+            for cell_val in next(ws.iter_rows(min_row=1, max_row=1, values_only=True)):
+                s = str(cell_val or "").strip()
+                if s and s not in ("None",):
+                    titles.append((fname, s))
+                    break
+            wb.close()
+        except Exception:
+            pass
+
+    return titles
 # ──────────────────────────────────────────────
 
 
@@ -2920,6 +3048,24 @@ class BatchPrintGUI:
 
     # ── 合并工资表及报盘并打印 ──────────────────────────────
 
+    MAX_DIALOG_TITLES = 15  # 超过此数量不弹窗，直接自动构造
+
+    def _prepare_merge(self):
+        """返回 (selected_title, cancelled) — cancelled=True 表示用户取消"""
+        titles = scan_file_titles(self.payroll_dir)
+        unique = sorted(set(t[1] for t in titles))
+        if len(unique) <= 1:
+            return (unique[0] if unique else None, False)
+        if len(unique) > self.MAX_DIALOG_TITLES:
+            return (None, False)  # 太多不同标题，自动构造
+        chosen = _choose_title_dialog(
+            self.root, titles,
+            subtitle=f"共 {len(titles)} 个 signed_ 文件，{len(unique)} 种不同标题"
+        )
+        if chosen is None:
+            return (None, True)  # 用户取消
+        return (chosen, False)
+
     def run_merge_payroll_and_print(self):
         if not self._check_dirs():
             return
@@ -2929,9 +3075,17 @@ class BatchPrintGUI:
         self.log("开始合并工资表及报盘（按个税分组）...")
         self.log("")
 
+        selected_title, cancelled = self._prepare_merge()
+        if cancelled:
+            self.log("  用户取消合并")
+            self._set_busy(False)
+            return
+        self.log(f"  输出标题：{selected_title or '（自动合成）'}")
+
         try:
             payroll_path, bank_path, validation_results, op_log_path = merge_payrolls_by_tax(
-                self.payroll_dir, self.output_dir, self.bank_dir
+                self.payroll_dir, self.output_dir, self.bank_dir,
+                selected_title=selected_title
             )
         except Exception as e:
             self.log(f"  ✗ 合并失败：{e}")
@@ -2994,9 +3148,17 @@ class BatchPrintGUI:
         self.log("开始合并工资表及报盘（不打印）...")
         self.log("")
 
+        selected_title, cancelled = self._prepare_merge()
+        if cancelled:
+            self.log("  用户取消合并")
+            self._set_busy(False)
+            return
+        self.log(f"  输出标题：{selected_title or '（自动合成）'}")
+
         try:
             payroll_path, bank_path, validation_results, op_log_path = merge_payrolls_by_tax(
-                self.payroll_dir, self.output_dir, self.bank_dir
+                self.payroll_dir, self.output_dir, self.bank_dir,
+                selected_title=selected_title
             )
         except Exception as e:
             self.log(f"  ✗ 合并失败：{e}")
