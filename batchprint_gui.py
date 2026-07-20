@@ -568,7 +568,6 @@ def merge_bank_files_advanced(bank_dir, output_dir,
 
             wb = openpyxl.load_workbook(bank_tmpl_path)
             ws = wb["代发工资模板"]
-            ws.title = "合并报盘"
             for r in range(5, 8):
                 for c in range(1, 7):
                     ws.cell(row=r, column=c).value = None
@@ -582,7 +581,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
             ws["B2"] = total_amount
             ws["B2"].number_format = "0.00"
             ws["B3"] = len(all_rows)
-            wb.active = wb.sheetnames.index("合并报盘")
+            wb.active = wb.sheetnames.index("代发工资模板")
             wb.save(merged_path)
             output_files.append(merged_path)
 
