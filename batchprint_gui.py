@@ -490,7 +490,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                 else:
                     continue
                 for row_data in rows:
-                    all_operation_records.append({
+                    op_rec = {
                         "source_file": fname,
                         "source_unit": unit_name,
                         "source_bank": bank,
@@ -504,12 +504,13 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                         "output_file": "",
                         "output_seq": 0,
                         "filtered_reason": "",
-                    })
+                    }
                     is_zero = row_data[3] is not None and float(row_data[3]) == 0
                     if is_zero:
-                        rec["filtered_reason"] = "金额为0，已过滤"
+                        op_rec["filtered_reason"] = "金额为0，已过滤"
                     else:
                         all_rows.append(row_data)
+                    all_operation_records.append(op_rec)
                 bank_counts[bank] += len(rows)
                 yearmons_in_sub.add(yearmon)
 
