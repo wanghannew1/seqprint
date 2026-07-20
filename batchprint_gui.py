@@ -540,7 +540,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
             seq_prefix = str(group_idx).zfill(pad_width)
 
             if filename_simple:
-                parts = [f"{seq_prefix}_{group_key}", ym_suffix] if ym_suffix else [f"{seq_prefix}_{group_key}"]
+                parts = [group_key, ym_suffix] if ym_suffix else [group_key]
                 merged_name = "-".join(parts) + ".xlsx"
             else:
                 banks_in_sub = sorted(set(r[1] for r in sub_recs), key=_bank_sort)
@@ -4392,7 +4392,7 @@ class MergeOptionsDialog:
                  font=("微软雅黑", 10, "bold"), anchor=tk.W).pack(fill=tk.X, pady=(0, 6))
         self.filename_var = tk.StringVar(value="simple")
         for fval, flabel, fdesc in [
-            ("simple", "简洁（推荐）", "大单位名-月份.xlsx"),
+            ("simple", "简洁（推荐）", "大单位名-月份.xlsx（不含序号）"),
             ("full", "详细", "序号_大单位名-月份-银行笔数-总数-总金额.xlsx"),
         ]:
             frame = tk.Frame(main)
