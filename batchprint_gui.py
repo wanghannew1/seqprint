@@ -593,6 +593,35 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                 parts = [f"{seq_prefix}_{group_key}", ym_suffix, bank_suffix,
                          f"总数{len(all_rows)}笔", f"总计{yuan}元{jiao}角{fen}分"]
                 merged_name = "-".join(parts) + ".xlsx"
+            # 扫描全部已有记录，检查本组是否与任何已处理记录重复（含跨子组）
+            if all_operation_records:
+                dup_seen = defaultdict(int)
+                for rec in all_operation_records:
+                    if rec.get("filtered_reason"):
+                        continue
+                    person = str(rec.get("id_number", "")).strip()
+                    account = str(rec.get("name", "")).strip()
+                    if not person and not account:
+                        continue
+                    k = (rec["source_yearmon"], rec["big_org"],
+                         person or "", account or "", float(rec["amount"]))
+                    dup_seen[k] += 1
+                current_keys = set()
+                for rec in all_operation_records[records_before:]:
+                    if rec.get("filtered_reason"):
+                        continue
+                    person = str(rec.get("id_number", "")).strip()
+                    account = str(rec.get("name", "")).strip()
+                    if not person and not account:
+                        continue
+                    k = (rec["source_yearmon"], rec["big_org"],
+                         person or "", account or "", float(rec["amount"]))
+                    current_keys.add(k)
+                has_dup = any(dup_seen[k] >= 2 for k in current_keys)
+            else:
+                has_dup = False
+            if has_dup:
+                merged_name = merged_name.replace(".xlsx", "-可能重复.xlsx")
             merged_path = os.path.join(output_dir, merged_name)
 
             wb = openpyxl.load_workbook(bank_tmpl_path)
