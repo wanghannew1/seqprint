@@ -487,14 +487,9 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                     rows = _read_ccb_rows(fpath, warnings_list)
                 elif bt == "jlb":
                     rows = _read_jlb_rows(fpath, warnings_list)
-                    before = len(rows)
-                    rows = [r for r in rows if r[3] is not None and float(r[3]) > 0]
-                    if len(rows) < before:
-                        warnings_list.append(f"吉林银行 {fname}: 过滤 {before - len(rows)} 条金额为0的数据")
                 else:
                     continue
                 for row_data in rows:
-                    all_rows.append(row_data)
                     all_operation_records.append({
                         "source_file": fname,
                         "source_unit": unit_name,
@@ -509,6 +504,9 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                         "output_file": "",
                         "output_seq": 0,
                     })
+                    # 金额为0的行不写入输出报盘文件，但保留在操作记录中
+                    if row_data[3] is not None and float(row_data[3]) > 0:
+                        all_rows.append(row_data)
                 bank_counts[bank] += len(rows)
                 yearmons_in_sub.add(yearmon)
 
