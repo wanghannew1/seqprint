@@ -503,9 +503,12 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                         "is_excluded": rec_excluded,
                         "output_file": "",
                         "output_seq": 0,
+                        "filtered_reason": "",
                     })
-                    # 金额为0的行不写入输出报盘文件，但保留在操作记录中
-                    if row_data[3] is not None and float(row_data[3]) > 0:
+                    is_zero = row_data[3] is not None and float(row_data[3]) == 0
+                    if is_zero:
+                        rec["filtered_reason"] = "金额为0，已过滤"
+                    else:
                         all_rows.append(row_data)
                 bank_counts[bank] += len(rows)
                 yearmons_in_sub.add(yearmon)
@@ -574,8 +577,12 @@ def merge_bank_files_advanced(bank_dir, output_dir,
             wb.save(merged_path)
             output_files.append(merged_path)
 
-            for idx, rec in enumerate(all_operation_records[records_before:]):
-                rec["output_seq"] = idx + 1
+            written_idx = 0
+            for rec in all_operation_records[records_before:]:
+                if rec.get("filtered_reason"):
+                    continue
+                written_idx += 1
+                rec["output_seq"] = written_idx
                 rec["output_file"] = merged_name
 
             stats["big_orgs"].add(group_key)
@@ -624,7 +631,7 @@ def _generate_operation_record(output_dir, records, stats, output_files):
         "序号", "源文件名", "源单位名", "源银行", "源月份",
         "源文件行号", "收款户名", "收款账号", "金额",
         "归类大单位", "是否排除",
-        "输出文件名", "输出文件行号",
+        "输出文件名", "输出文件行号", "备注",
     ]
     for c, h in enumerate(headers, 1):
         cell = ws.cell(1, c, h)
@@ -633,7 +640,7 @@ def _generate_operation_record(output_dir, records, stats, output_files):
         cell.alignment = header_align
         cell.border = Border(top=thin, bottom=thin, left=thin, right=thin)
 
-    col_widths = [8, 52, 36, 12, 10, 12, 14, 22, 12, 24, 10, 52, 14]
+    col_widths = [8, 52, 36, 12, 10, 12, 14, 22, 12, 24, 10, 52, 14, 18]
     for c, w in enumerate(col_widths, 1):
         ws.column_dimensions[chr(64 + c) if c <= 26 else "?"].width = w
 
@@ -654,12 +661,16 @@ def _generate_operation_record(output_dir, records, stats, output_files):
         ws.cell(r, 11, "是" if rec["is_excluded"] else "").alignment = data_align
         ws.cell(r, 12, rec["output_file"]).alignment = data_align
         ws.cell(r, 13, rec["output_seq"]).alignment = data_align
-        for c in range(1, 14):
+        filtered = rec.get("filtered_reason", "")
+        ws.cell(r, 14, filtered).alignment = data_align
+        for c in range(1, 15):
             ws.cell(r, c).border = Border(top=thin, bottom=thin, left=thin, right=thin)
-            if rec["is_excluded"]:
+            if filtered:
+                ws.cell(r, c).fill = PatternFill("solid", fgColor="FCE4EC")
+            elif rec["is_excluded"]:
                 ws.cell(r, c).fill = PatternFill("solid", fgColor="F2F2F2")
 
-    ws.auto_filter.ref = f"A1:M{len(records) + 1}"
+    ws.auto_filter.ref = f"A1:N{len(records) + 1}"
     ws.freeze_panes = "A2"
 
     ws2 = wb.create_sheet("汇总")
@@ -667,6 +678,7 @@ def _generate_operation_record(output_dir, records, stats, output_files):
         ("统计项", "值"),
         ("源文件总数", stats.get("total_files", 0)),
         ("数据总行数", len(records)),
+        ("金额为0已过滤行数", sum(1 for r in records if r.get("filtered_reason"))),
         ("排除项数据行数", sum(1 for r in records if r["is_excluded"])),
         ("生成合并文件数", len(output_files)),
         ("", ""),
