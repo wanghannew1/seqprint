@@ -3771,6 +3771,13 @@ class BatchPrintGUI:
             self.log(f"  ⚠ 警告 ({len(warnings)} 条)：")
             for w in warnings:
                 self.log(f"    - {w}")
+            dup_warnings = [w for w in warnings if "可能重复报盘" in w]
+            if dup_warnings:
+                msg = f"发现 {len(dup_warnings)} 条可能重复报盘记录，请在输出目录查看操作记录确认:\n\n"
+                msg += "\n".join(f"• {w}" for w in dup_warnings[:5])
+                if len(dup_warnings) > 5:
+                    msg += f"\n... 及另外 {len(dup_warnings) - 5} 条"
+                messagebox.showwarning("重复报盘警告", msg)
 
         self.log("")
         self.log("  📊 统计信息：")
