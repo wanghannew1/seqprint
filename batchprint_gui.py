@@ -267,7 +267,7 @@ def _get_mapping_excel_path():
     global _MAPPING_EXCEL
     if _MAPPING_EXCEL is None:
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        _MAPPING_EXCEL = os.path.join(script_dir, "6月银行导入模板分类清单.xlsx")
+        _MAPPING_EXCEL = os.path.join(script_dir, "template", "映射规则.xlsx")
     return _MAPPING_EXCEL
 
 
