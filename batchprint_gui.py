@@ -258,94 +258,81 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
 # 银行报盘高级合并（按大单位/银行/月份合并）
 # ──────────────────────────────────────────────
 
-EXCLUDED_PREFIXES = [
-    "吉林省交通实业发展有限公司",
-    "吉林省高等学校毕业生就业指导中心",
-    "中建银（北京）房地产土地资产评估有限公司",
-    "供销粮油吉林有限公司",
-    "平高集团华生电力设计有限公司",
-    "中国邮政储蓄银行股份有限公司吉林省分行直属支行",
-    "国家税务总局长春净月高新技术产业开发区税务局",
-]
+# ── 映射规则：从 6月银行导入模板分类清单.xlsx 的「映射规则」sheet 读取 ──
+_MAPPING_EXCEL = None
 
-JL_HOSPITALS = ["吉林大学第一医院", "吉林大学第二医院", "吉林大学口腔医院", "吉林大学中日联谊医院"]
+
+def _get_mapping_excel_path():
+    """返回映射规则 Excel 的路径（与脚本同目录）"""
+    global _MAPPING_EXCEL
+    if _MAPPING_EXCEL is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        _MAPPING_EXCEL = os.path.join(script_dir, "6月银行导入模板分类清单.xlsx")
+    return _MAPPING_EXCEL
+
+
+def _load_mapping_rules():
+    """从 Excel「映射规则」sheet 加载规则列表。
+
+    返回 list[ (match_type, pattern, big_org, is_excluded) ]
+    """
+    import openpyxl
+    excel_path = _get_mapping_excel_path()
+    if not os.path.exists(excel_path):
+        return []
+    try:
+        wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
+    except Exception:
+        return []
+    if "映射规则" not in wb.sheetnames:
+        wb.close()
+        return []
+    ws = wb["映射规则"]
+    rules = []
+    for r in range(2, ws.max_row + 1):
+        match_type = ws.cell(r, 2).value  # B: 匹配方式
+        pattern = ws.cell(r, 3).value     # C: 模式
+        big_org = ws.cell(r, 4).value     # D: 大单位名
+        excluded = ws.cell(r, 5).value    # E: 是否排除
+        if not pattern or not match_type:
+            continue
+        rules.append((
+            str(match_type).strip(),
+            str(pattern).strip(),
+            str(big_org).strip() if big_org else "",
+            str(excluded).strip() == "Y",
+        ))
+    wb.close()
+    return rules
 
 
 def is_excluded(unit_name):
-    for prefix in EXCLUDED_PREFIXES:
-        if unit_name.startswith(prefix):
+    rules = _load_mapping_rules()
+    for match_type, pattern, _big_org, excluded in rules:
+        if not excluded:
+            continue
+        if match_type == "prefix" and unit_name.startswith(pattern):
+            return True
+        if match_type == "exact" and unit_name == pattern:
+            return True
+        if match_type == "contains" and pattern in unit_name:
             return True
     return False
 
 
 def get_big_org(unit_name):
+    rules = _load_mapping_rules()
     if is_excluded(unit_name):
         return unit_name, unit_name
-    if unit_name == "中铁建大桥局六公司":
-        return "中铁建大桥工程局集团第六工程有限公司", unit_name
-    if unit_name.startswith("(吉林大学）"):
-        return "吉林大学", unit_name
-    for prefix in JL_HOSPITALS:
-        if unit_name.startswith(prefix):
-            return prefix, unit_name
-    if unit_name.startswith("吉林大学"):
-        return "吉林大学", unit_name
-    if unit_name.startswith("东北师范大学"):
-        return "东北师范大学", unit_name
-    if "吉林省农业科学院" in unit_name:
-        return "吉林省农业科学院", unit_name
-    if "吉林省林业科学研究院" in unit_name:
-        return "吉林省林业科学研究院", unit_name
-    if "吉林银行" in unit_name:
-        return "吉林银行", unit_name
-    if "中国铁建大桥工程局" in unit_name:
-        return "中国铁建大桥工程局集团", unit_name
-    if "中铁建大桥工程局集团第六工程有限公司" in unit_name:
-        return "中铁建大桥工程局集团第六工程有限公司", unit_name
-    if "中国检验认证" in unit_name:
-        return "中国检验认证集团吉林分公司", unit_name
-    if "吉林省交通科学研究所" in unit_name:
-        return "吉林省交通科学研究所", unit_name
-    if "吉林省交通规划设计院" in unit_name:
-        return "吉林省交通规划设计院", unit_name
-    if "吉林省假肢康复中心" in unit_name:
-        return "吉林省假肢康复中心", unit_name
-    if "吉林省工程技术学校" in unit_name:
-        return "吉林省工程技术学校", unit_name
-    if "吉林省戏曲剧院" in unit_name:
-        return "吉林省戏曲剧院", unit_name
-    if "吉林农业大学" in unit_name:
-        return "吉林农业大学", unit_name
-    if "吉林松辽" in unit_name:
-        return "吉林松辽水资源开发有限责任公司", unit_name
-    if "吉林省交通运输厅" in unit_name:
-        return "吉林省交通运输厅", unit_name
-    if "吉智科技" in unit_name:
-        return "吉智科技研发（长春）有限公司", unit_name
-    if "吉林粮食资产管理有限公司" in unit_name:
-        return "吉林粮食资产管理有限公司", unit_name
-    if "吉林建筑大学" in unit_name:
-        return "吉林建筑大学", unit_name
-    if "长春中医药大学" in unit_name:
-        return "长春中医药大学", unit_name
-    if "长春工业大学" in unit_name:
-        return "长春工业大学", unit_name
-    if "长春博众" in unit_name:
-        return "长春博众汽车零部件有限责任公司", unit_name
-    if "长春市公共关系学校" in unit_name:
-        return "长春市公共关系学校", unit_name
-    if "长春市城建工程学校" in unit_name:
-        return "长春市城建工程学校", unit_name
-    if "长春市九台区职业技术教育中心" in unit_name:
-        return "长春市九台区职业技术教育中心", unit_name
-    if "长春市得一物业服务有限公司" in unit_name:
-        return "长春市得一物业服务有限公司", unit_name
-    if "长春市体育彩票管理中心" in unit_name:
-        return "长春市体育彩票管理中心", unit_name
-    if "中铁津桥" in unit_name:
-        return "中铁津桥工程检测有限公司", unit_name
-    if "天津弘创智融" in unit_name:
-        return "天津弘创智融科技有限公司", unit_name
+    for match_type, pattern, big_org, excluded in rules:
+        if excluded:
+            continue
+        if match_type == "prefix" and unit_name.startswith(pattern):
+            return big_org, unit_name
+        if match_type == "exact" and unit_name == pattern:
+            return big_org, unit_name
+        if match_type == "contains" and pattern in unit_name:
+            return big_org, unit_name
     return unit_name, unit_name
 
 
