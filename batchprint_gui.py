@@ -31,16 +31,16 @@ def split_filename(filename):
 
 
 def detect_bank_type(filename):
-    """
-    从文件名判断银行类型
-    返回: 'ccb' (建设银行), 'icbc' (工商银行), 'jlb' (吉林银行)
-    """
     if "建设银行" in filename:
         return "ccb"
     if "工商银行" in filename:
         return "icbc"
     if "吉林银行" in filename:
         return "jlb"
+    known_others = ["中国银行", "交通银行", "农业银行", "九台农商行", "春城农商行"]
+    for kb in known_others:
+        if kb in filename:
+            return "ccb"
     raise ValueError(f"无法识别银行类型: {filename}")
 
 
@@ -252,6 +252,326 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
         merged_files.append(merged_name)
 
     return sorted(merged_files), warnings
+
+
+# ──────────────────────────────────────────────
+# 银行报盘高级合并（按大单位/银行/月份合并）
+# ──────────────────────────────────────────────
+
+EXCLUDED_PREFIXES = [
+    "吉林省交通实业发展有限公司",
+    "吉林省高等学校毕业生就业指导中心",
+    "中建银（北京）房地产土地资产评估有限公司",
+    "供销粮油吉林有限公司",
+    "平高集团华生电力设计有限公司",
+    "中国邮政储蓄银行股份有限公司吉林省分行直属支行",
+    "国家税务总局长春净月高新技术产业开发区税务局",
+]
+
+JL_HOSPITALS = ["吉林大学第一医院", "吉林大学第二医院", "吉林大学口腔医院", "吉林大学中日联谊医院"]
+
+
+def is_excluded(unit_name):
+    for prefix in EXCLUDED_PREFIXES:
+        if unit_name.startswith(prefix):
+            return True
+    return False
+
+
+def get_big_org(unit_name):
+    if is_excluded(unit_name):
+        return unit_name, unit_name
+    if unit_name == "中铁建大桥局六公司":
+        return "中铁建大桥工程局集团第六工程有限公司", unit_name
+    if unit_name.startswith("(吉林大学）"):
+        return "吉林大学", unit_name
+    for prefix in JL_HOSPITALS:
+        if unit_name.startswith(prefix):
+            return prefix, unit_name
+    if unit_name.startswith("吉林大学"):
+        return "吉林大学", unit_name
+    if unit_name.startswith("东北师范大学"):
+        return "东北师范大学", unit_name
+    if "吉林省农业科学院" in unit_name:
+        return "吉林省农业科学院", unit_name
+    if "吉林省林业科学研究院" in unit_name:
+        return "吉林省林业科学研究院", unit_name
+    if "吉林银行" in unit_name:
+        return "吉林银行", unit_name
+    if "中国铁建大桥工程局" in unit_name:
+        return "中国铁建大桥工程局集团", unit_name
+    if "中铁建大桥工程局集团第六工程有限公司" in unit_name:
+        return "中铁建大桥工程局集团第六工程有限公司", unit_name
+    if "中国检验认证" in unit_name:
+        return "中国检验认证集团吉林分公司", unit_name
+    if "吉林省交通科学研究所" in unit_name:
+        return "吉林省交通科学研究所", unit_name
+    if "吉林省交通规划设计院" in unit_name:
+        return "吉林省交通规划设计院", unit_name
+    if "吉林省假肢康复中心" in unit_name:
+        return "吉林省假肢康复中心", unit_name
+    if "吉林省工程技术学校" in unit_name:
+        return "吉林省工程技术学校", unit_name
+    if "吉林省戏曲剧院" in unit_name:
+        return "吉林省戏曲剧院", unit_name
+    if "吉林农业大学" in unit_name:
+        return "吉林农业大学", unit_name
+    if "吉林松辽" in unit_name:
+        return "吉林松辽水资源开发有限责任公司", unit_name
+    if "吉林省交通运输厅" in unit_name:
+        return "吉林省交通运输厅", unit_name
+    if "吉智科技" in unit_name:
+        return "吉智科技研发（长春）有限公司", unit_name
+    if "吉林粮食资产管理有限公司" in unit_name:
+        return "吉林粮食资产管理有限公司", unit_name
+    if "吉林建筑大学" in unit_name:
+        return "吉林建筑大学", unit_name
+    if "长春中医药大学" in unit_name:
+        return "长春中医药大学", unit_name
+    if "长春工业大学" in unit_name:
+        return "长春工业大学", unit_name
+    if "长春博众" in unit_name:
+        return "长春博众汽车零部件有限责任公司", unit_name
+    if "长春市公共关系学校" in unit_name:
+        return "长春市公共关系学校", unit_name
+    if "长春市城建工程学校" in unit_name:
+        return "长春市城建工程学校", unit_name
+    if "长春市九台区职业技术教育中心" in unit_name:
+        return "长春市九台区职业技术教育中心", unit_name
+    if "长春市得一物业服务有限公司" in unit_name:
+        return "长春市得一物业服务有限公司", unit_name
+    if "长春市体育彩票管理中心" in unit_name:
+        return "长春市体育彩票管理中心", unit_name
+    if "中铁津桥" in unit_name:
+        return "中铁津桥工程检测有限公司", unit_name
+    if "天津弘创智融" in unit_name:
+        return "天津弘创智融科技有限公司", unit_name
+    return unit_name, unit_name
+
+
+def merge_bank_files_advanced(bank_dir, output_dir,
+                              merge_different_banks=True,
+                              merge_different_months=True,
+                              merge_by_big_org=True,
+                              progress_callback=None):
+    """
+    高级合并银行报盘文件，支持三种合并策略开关。
+
+    参数:
+        bank_dir: 银行报盘目录（包含 YYYYMM-银行-单位名.xls 文件）
+        output_dir: 输出目录
+        merge_different_banks: True=同单位不同银行合并到同一文件
+        merge_different_months: True=同单位不同月份合并到同一文件
+        merge_by_big_org: True=按大单位合并
+        progress_callback: (current, total, message)
+
+    返回:
+        (output_files, warnings, stats)
+        output_files: 生成的合并文件路径列表
+        warnings: 警告列表
+        stats: 统计信息 dict
+    """
+    import os, re
+    from collections import defaultdict
+
+    bank_dir = os.path.normpath(bank_dir)
+    output_dir = os.path.normpath(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    bank_files = [f for f in os.listdir(bank_dir) if f.lower().endswith(".xls")]
+    if not bank_files:
+        return [], ["目录中未找到 .xls 文件"], {}
+
+    if progress_callback:
+        progress_callback(0, 1, f"扫描到 {len(bank_files)} 个报盘文件")
+
+    file_records = []
+    skip_files = []
+    for fname in sorted(bank_files):
+        try:
+            yearmon, bank, unit_name = split_filename(fname)
+            file_records.append((yearmon, bank, unit_name, fname))
+        except ValueError:
+            skip_files.append(fname)
+
+    if not file_records:
+        return [], ["所有文件均无法解析文件名"], {}
+
+    classified = []
+    for yearmon, bank, unit_name, fname in file_records:
+        big_org, _ = get_big_org(unit_name)
+        excluded = is_excluded(unit_name)
+        classified.append((yearmon, bank, unit_name, fname, big_org, excluded))
+
+    groups = defaultdict(list)
+    for rec in classified:
+        yearmon, bank, unit_name, fname, big_org, excluded = rec
+        if merge_by_big_org and not excluded:
+            group_key = big_org
+        else:
+            group_key = unit_name
+        groups[group_key].append(rec)
+
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    bank_tmpl_path = os.path.join(_script_dir, "template", "代发业务导入模板.xlsx")
+    if not os.path.exists(bank_tmpl_path):
+        return [], [f"模板文件不存在: {bank_tmpl_path}"], {}
+
+    warnings_list = []
+    output_files = []
+    stats = {
+        "total_files": len(file_records),
+        "total_groups": len(groups),
+        "excluded_count": sum(1 for _, _, _, _, _, ex in classified if ex),
+        "excluded_units": set(u for _, _, u, _, _, ex in classified if ex),
+        "big_orgs": set(),
+        "bank_counts": defaultdict(int),
+    }
+
+    total_groups = len(groups)
+    pad_width = len(str(total_groups))
+
+    # 银行排序
+    def _bank_sort(b):
+        order = {"建设银行": 0, "工商银行": 1, "吉林银行": 2,
+                 "中国银行": 3, "交通银行": 4, "农业银行": 5,
+                 "九台农商行": 6, "春城农商行": 7}
+        return order.get(b, 99)
+
+    for group_idx, (group_key, recs) in enumerate(sorted(groups.items()), 1):
+        if progress_callback:
+            progress_callback(group_idx, total_groups, f"处理: {group_key}")
+
+        all_banks = sorted(set(r[1] for r in recs), key=_bank_sort)
+        all_yearmons = sorted(set(r[0] for r in recs))
+
+        sub_groups = {}
+        for rec in recs:
+            yearmon, bank = rec[0], rec[1]
+            if not merge_different_months and not merge_different_banks:
+                sub_key = f"{yearmon}|{bank}"
+            elif not merge_different_months:
+                sub_key = yearmon
+            elif not merge_different_banks:
+                sub_key = bank
+            else:
+                sub_key = "_all"
+            sub_groups.setdefault(sub_key, []).append(rec)
+
+        def _sub_sort_key(k):
+            if k == "_all":
+                return (0, "")
+            parts = k.split("|")
+            if len(parts) == 2:
+                return (1, parts[0], _bank_sort(parts[1]))
+            if k in all_banks:
+                return (2, _bank_sort(k))
+            return (3, k)
+
+        sorted_sub_keys = sorted(sub_groups.keys(), key=_sub_sort_key)
+
+        for sub_key in sorted_sub_keys:
+            sub_recs = sub_groups[sub_key]
+
+            # 读取所有数据
+            all_rows = []
+            bank_counts = defaultdict(int)
+            yearmons_in_sub = set()
+
+            for rec in sub_recs:
+                yearmon, bank, unit_name, fname = rec[0], rec[1], rec[2], rec[3]
+                fpath = os.path.join(bank_dir, fname)
+                bt = detect_bank_type(fname)
+                if bt == "icbc":
+                    rows = _read_icbc_rows(fpath, warnings_list)
+                elif bt == "ccb":
+                    rows = _read_ccb_rows(fpath, warnings_list)
+                elif bt == "jlb":
+                    rows = _read_jlb_rows(fpath, warnings_list)
+                else:
+                    continue
+                all_rows.extend(rows)
+                bank_counts[bank] += len(rows)
+                yearmons_in_sub.add(yearmon)
+
+            if not all_rows:
+                continue
+
+            for i, row in enumerate(all_rows, 1):
+                row[0] = i
+
+            seq_prefix = str(group_idx).zfill(pad_width)
+            sorted_ym = sorted(yearmons_in_sub)
+            if len(sorted_ym) == 1:
+                ym_suffix = sorted_ym[0]
+            elif len(sorted_ym) > 1:
+                try:
+                    nums = sorted(int(y) for y in sorted_ym)
+                    if all(nums[i] + 1 == nums[i+1] for i in range(len(nums)-1)):
+                        ym_suffix = f"{sorted_ym[0]}-{sorted_ym[-1]}"
+                    else:
+                        ym_suffix = "_".join(sorted_ym)
+                except ValueError:
+                    ym_suffix = "_".join(sorted_ym)
+            else:
+                ym_suffix = ""
+
+            banks_in_sub = sorted(set(r[1] for r in sub_recs), key=_bank_sort)
+            bank_parts = []
+            for b in banks_in_sub:
+                count = bank_counts.get(b, 0)
+                bank_parts.append(f"{b}{count}笔")
+            bank_suffix = "_".join(bank_parts)
+
+            total_fen = 0
+            for row in all_rows:
+                amt = row[3]
+                if isinstance(amt, Decimal):
+                    total_fen += int(amt * 100)
+                else:
+                    total_fen += int(round(float(amt) * 100))
+            yuan = total_fen // 100
+            jiao = (total_fen % 100) // 10
+            fen = total_fen % 10
+
+            parts = [f"{seq_prefix}_{group_key}", ym_suffix, bank_suffix,
+                     f"总数{len(all_rows)}笔", f"总计{yuan}元{jiao}角{fen}分"]
+            merged_name = "-".join(parts) + ".xlsx"
+            merged_path = os.path.join(output_dir, merged_name)
+
+            wb = openpyxl.load_workbook(bank_tmpl_path)
+            ws = wb["代发工资模板"]
+            ws.title = "合并报盘"
+            for r in range(5, 8):
+                for c in range(1, 7):
+                    ws.cell(row=r, column=c).value = None
+            for out_idx, row in enumerate(all_rows, start=5):
+                ws.cell(row=out_idx, column=1, value=out_idx - 4)
+                ws.cell(row=out_idx, column=2, value=str(row[1]).strip())
+                ws.cell(row=out_idx, column=3, value=str(row[2]).strip())
+                cell_e = ws.cell(row=out_idx, column=5, value=row[3])
+                cell_e.number_format = "0.00"
+            total_amount = sum(float(row[3] or 0) for row in all_rows)
+            ws["B2"] = total_amount
+            ws["B2"].number_format = "0.00"
+            ws["B3"] = len(all_rows)
+            wb.save(merged_path)
+            output_files.append(merged_path)
+
+            stats["big_orgs"].add(group_key)
+            for b in banks_in_sub:
+                stats["bank_counts"][b] += 1
+
+    stats["output_count"] = len(output_files)
+    stats["big_orgs"] = sorted(stats["big_orgs"])
+
+    if skip_files:
+        warnings_list.append(f"以下 {len(skip_files)} 个文件文件名不符合格式，已跳过：{', '.join(skip_files[:5])}")
+
+    if progress_callback:
+        progress_callback(total_groups, total_groups, f"完成！生成 {len(output_files)} 个合并文件")
+
+    return output_files, warnings_list, stats
 
 
 def convert_bank_format(bank_dir, output_dir):
@@ -2762,6 +3082,18 @@ class BatchPrintGUI:
         )
         self.bank_convert_btn.pack(side=tk.LEFT, padx=(0, 6))
 
+        self.adv_merge_btn = tk.Button(
+            row3,
+            text="高级合并报盘",
+            command=self.run_advanced_merge,
+            bg="#2c3e50",
+            fg="white",
+            font=("微软雅黑", 11, "bold"),
+            padx=16,
+            pady=4,
+        )
+        self.adv_merge_btn.pack(side=tk.LEFT, padx=(6, 0))
+
         # 分隔线
         sep = tk.Frame(self.root, height=2, bd=1, relief=tk.SUNKEN)
         sep.pack(fill=tk.X, padx=10, pady=6)
@@ -3215,6 +3547,78 @@ class BatchPrintGUI:
 
         self.log("")
         self.log("转换完成。")
+        self.log("=" * 50)
+        self._set_busy(False)
+
+    # ── 高级合并报盘 ──────────────────────────
+
+    def run_advanced_merge(self):
+        if not self.bank_dir:
+            messagebox.showwarning("提示", "请先选择银行报盘目录")
+            return
+        if not self.output_dir:
+            messagebox.showwarning("提示", "请先选择输出目录")
+            return
+
+        dlg = MergeOptionsDialog(self.root)
+        if dlg.cancelled:
+            return
+        opts = dlg.get_options()
+
+        self._set_busy(True)
+        self.log("=" * 50)
+        self.log("开始高级合并报盘...")
+        self.log("")
+        self.log(f"  银行报盘目录：{self.bank_dir}")
+        self.log(f"  输出目录：{self.output_dir}")
+        self.log(f"  合并选项：")
+        self.log(f"    - 同单位不同银行合并：{'✓' if opts['merge_banks'] else '✗'}")
+        self.log(f"    - 同单位不同月份合并：{'✓' if opts['merge_months'] else '✗'}")
+        self.log(f"    - 按大单位合并：{'✓' if opts['merge_big_org'] else '✗'}")
+
+        def progress_cb(current, total, message):
+            self.log(f"  [{current}/{total}] {message}")
+            self.root.update()
+
+        try:
+            output_files, warnings, stats = merge_bank_files_advanced(
+                self.bank_dir, self.output_dir,
+                merge_different_banks=opts["merge_banks"],
+                merge_different_months=opts["merge_months"],
+                merge_by_big_org=opts["merge_big_org"],
+                progress_callback=progress_cb,
+            )
+        except Exception as e:
+            self.log(f"  ✗ 合并失败：{e}")
+            import traceback
+            self.log(traceback.format_exc())
+            self._set_busy(False)
+            return
+
+        self.log("")
+        self.log(f"  📁 输出目录：{self.output_dir}")
+        self.log(f"  ✓ 生成 {len(output_files)} 个合并文件：")
+        for fpath in sorted(output_files):
+            self.log(f"    {os.path.basename(fpath)}")
+
+        if warnings:
+            self.log(f"  ⚠ 警告 ({len(warnings)} 条)：")
+            for w in warnings:
+                self.log(f"    - {w}")
+
+        self.log("")
+        self.log("  📊 统计信息：")
+        self.log(f"    原文件数：{stats['total_files']}")
+        self.log(f"    合并文件数：{stats['output_count']}")
+        self.log(f"    大单位数：{len(stats['big_orgs'])}")
+        excluded_units = stats.get("excluded_units", set())
+        if excluded_units:
+            self.log(f"    排除项单位数：{len(excluded_units)}")
+            for eu in sorted(excluded_units):
+                self.log(f"      - {eu}")
+
+        self.log("")
+        self.log("高级合并完成。")
         self.log("=" * 50)
         self._set_busy(False)
 
@@ -3797,8 +4201,96 @@ class _FormulaEditDialog:
         self.dialog.destroy()
 
 
+class MergeOptionsDialog:
+    """高级合并报盘选项对话框"""
+
+    def __init__(self, parent):
+        self.cancelled = True
+        self._options = {
+            "merge_banks": True,
+            "merge_months": True,
+            "merge_big_org": True,
+        }
+
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("高级合并报盘选项")
+        self.dialog.transient(parent)
+        self.dialog.resizable(False, False)
+        self.dialog.grab_set()
+
+        main = tk.Frame(self.dialog, padx=20, pady=16)
+        main.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(main, text="合并选项（默认全部开启）：",
+                 font=("微软雅黑", 11, "bold"), anchor=tk.W).pack(fill=tk.X, pady=(0, 12))
+
+        options = [
+            ("merge_banks", "合并同单位不同银行", "同一单位的多家银行报盘合并为一个文件"),
+            ("merge_months", "合并同单位不同月份", "同一单位的多个月份报盘合并为一个文件"),
+            ("merge_big_org", "按大单位合并", "将同属一个大单位的多个子单位合并，排除项除外"),
+        ]
+
+        self.vars = {}
+        for key, label, desc in options:
+            frame = tk.Frame(main)
+            frame.pack(fill=tk.X, pady=6)
+            var = tk.BooleanVar(value=True)
+            self.vars[key] = var
+            cb = tk.Checkbutton(frame, text=label, variable=var,
+                                font=("微软雅黑", 10, "bold"))
+            cb.pack(anchor=tk.W)
+            tk.Label(frame, text=desc, font=("微软雅黑", 9), fg="#666",
+                     anchor=tk.W).pack(anchor=tk.W, padx=(24, 0))
+
+        tk.Frame(main, height=1, bd=1, relief=tk.SUNKEN).pack(fill=tk.X, pady=10)
+        info_text = (
+            "说明：\n"
+            "• 排除项（外包业务等）不参与按大单位合并，独立生成文件\n"
+            "• 文件命名规则：序号_组名-年月-银行名笔数-总数-总计金额.xlsx\n"
+            "• 输出格式采用代发业务导入模板"
+        )
+        tk.Label(main, text=info_text, font=("微软雅黑", 9), fg="#555",
+                 justify=tk.LEFT, anchor=tk.W).pack(fill=tk.X, pady=(0, 12))
+
+        btn_frame = tk.Frame(main)
+        btn_frame.pack(fill=tk.X)
+        tk.Button(btn_frame, text="开始合并", command=self._on_ok,
+                  bg="#4a90d9", fg="white", font=("微软雅黑", 10, "bold"),
+                  padx=20, pady=2).pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_frame, text="取消", command=self._on_cancel,
+                  padx=12, pady=2).pack(side=tk.RIGHT)
+
+        self.dialog.update_idletasks()
+        w = max(self.dialog.winfo_reqwidth(), 420)
+        h = max(self.dialog.winfo_reqheight(), 320)
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        px = parent.winfo_rootx()
+        py = parent.winfo_rooty()
+        x = px + (pw - w) // 2
+        y = py + (ph - h) // 2
+        self.dialog.geometry(f"{w}x{h}+{max(0,x)}+{max(0,y)}")
+
+        self.dialog.wait_window()
+
+    def _on_ok(self):
+        self._options = {
+            "merge_banks": self.vars["merge_banks"].get(),
+            "merge_months": self.vars["merge_months"].get(),
+            "merge_big_org": self.vars["merge_big_org"].get(),
+        }
+        self.cancelled = False
+        self.dialog.destroy()
+
+    def _on_cancel(self):
+        self.cancelled = True
+        self.dialog.destroy()
+
+    def get_options(self):
+        return self._options
+
+
 def main():
-    """启动 GUI"""
     root = tk.Tk()
     app = BatchPrintGUI(root)
     root.mainloop()
