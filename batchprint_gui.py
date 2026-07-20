@@ -409,6 +409,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
 
     warnings_list = []
     output_files = []
+    all_operation_records = []  # 收集每条数据的来龙去脉
     stats = {
         "total_files": len(file_records),
         "total_groups": len(groups),
@@ -468,8 +469,12 @@ def merge_bank_files_advanced(bank_dir, output_dir,
             bank_counts = defaultdict(int)
             yearmons_in_sub = set()
 
+            records_before = len(all_operation_records)  # 标记本轮起点
+
             for rec in sub_recs:
                 yearmon, bank, unit_name, fname = rec[0], rec[1], rec[2], rec[3]
+                rec_big_org = rec[4]
+                rec_excluded = rec[5]
                 fpath = os.path.join(bank_dir, fname)
                 bt = detect_bank_type(fname)
                 if bt == "icbc":
@@ -480,7 +485,22 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                     rows = _read_jlb_rows(fpath, warnings_list)
                 else:
                     continue
-                all_rows.extend(rows)
+                for row_data in rows:
+                    all_rows.append(row_data)
+                    all_operation_records.append({
+                        "source_file": fname,
+                        "source_unit": unit_name,
+                        "source_bank": bank,
+                        "source_yearmon": yearmon,
+                        "source_seq": row_data[0],
+                        "name": str(row_data[1]).strip() if row_data[1] else "",
+                        "id_number": str(row_data[2]).strip() if row_data[2] else "",
+                        "amount": row_data[3],
+                        "big_org": group_key,
+                        "is_excluded": rec_excluded,
+                        "output_file": "",
+                        "output_seq": 0,
+                    })
                 bank_counts[bank] += len(rows)
                 yearmons_in_sub.add(yearmon)
 
@@ -548,6 +568,10 @@ def merge_bank_files_advanced(bank_dir, output_dir,
             wb.save(merged_path)
             output_files.append(merged_path)
 
+            for idx, rec in enumerate(all_operation_records[records_before:]):
+                rec["output_seq"] = idx + 1
+                rec["output_file"] = merged_name
+
             stats["big_orgs"].add(group_key)
             for b in banks_in_sub:
                 stats["bank_counts"][b] += 1
@@ -558,10 +582,111 @@ def merge_bank_files_advanced(bank_dir, output_dir,
     if skip_files:
         warnings_list.append(f"以下 {len(skip_files)} 个文件文件名不符合格式，已跳过：{', '.join(skip_files[:5])}")
 
+    # 生成操作记录 Excel
+    if all_operation_records:
+        op_record_path = _generate_operation_record(output_dir, all_operation_records, stats, output_files)
+        if op_record_path:
+            warnings_list.append(f"操作记录已生成: {os.path.basename(op_record_path)}")
+
     if progress_callback:
         progress_callback(total_groups, total_groups, f"完成！生成 {len(output_files)} 个合并文件")
 
     return output_files, warnings_list, stats
+
+
+def _generate_operation_record(output_dir, records, stats, output_files):
+    """生成操作记录 Excel，追踪每条数据从哪个原始文件到哪个输出文件。"""
+    import openpyxl
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, numbers
+
+    if not records:
+        return None
+
+    out_path = os.path.join(output_dir, "操作记录.xlsx")
+    wb = openpyxl.Workbook()
+
+    ws = wb.active
+    ws.title = "合并映射明细"
+
+    thin = Side(style='thin')
+    header_font = Font(bold=True, size=10)
+    header_fill = PatternFill("solid", fgColor="D9E1F2")
+    header_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    data_align = Alignment(vertical='center', wrap_text=False)
+
+    headers = [
+        "序号", "源文件名", "源单位名", "源银行", "源月份",
+        "源文件行号", "姓名", "身份证号", "金额",
+        "归类大单位", "是否排除",
+        "输出文件名", "输出文件行号",
+    ]
+    for c, h in enumerate(headers, 1):
+        cell = ws.cell(1, c, h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = Border(top=thin, bottom=thin, left=thin, right=thin)
+
+    col_widths = [8, 52, 36, 12, 10, 12, 14, 22, 12, 24, 10, 52, 14]
+    for c, w in enumerate(col_widths, 1):
+        ws.column_dimensions[chr(64 + c) if c <= 26 else "?"].width = w
+
+    for i, rec in enumerate(records, 1):
+        r = i + 1
+        ws.cell(r, 1, i).alignment = data_align
+        ws.cell(r, 2, rec["source_file"]).alignment = data_align
+        ws.cell(r, 3, rec["source_unit"]).alignment = data_align
+        ws.cell(r, 4, rec["source_bank"]).alignment = data_align
+        ws.cell(r, 5, rec["source_yearmon"]).alignment = data_align
+        ws.cell(r, 6, rec["source_seq"]).alignment = data_align
+        ws.cell(r, 7, rec["name"]).alignment = data_align
+        ws.cell(r, 8, rec["id_number"]).alignment = data_align
+        amt_cell = ws.cell(r, 9, float(rec["amount"]) if rec["amount"] else 0)
+        amt_cell.number_format = "0.00"
+        amt_cell.alignment = data_align
+        ws.cell(r, 10, rec["big_org"]).alignment = data_align
+        ws.cell(r, 11, "是" if rec["is_excluded"] else "").alignment = data_align
+        ws.cell(r, 12, rec["output_file"]).alignment = data_align
+        ws.cell(r, 13, rec["output_seq"]).alignment = data_align
+        for c in range(1, 14):
+            ws.cell(r, c).border = Border(top=thin, bottom=thin, left=thin, right=thin)
+            if rec["is_excluded"]:
+                ws.cell(r, c).fill = PatternFill("solid", fgColor="F2F2F2")
+
+    ws.auto_filter.ref = f"A1:M{len(records) + 1}"
+    ws.freeze_panes = "A2"
+
+    ws2 = wb.create_sheet("汇总")
+    summary_rows = [
+        ("统计项", "值"),
+        ("源文件总数", stats.get("total_files", 0)),
+        ("数据总行数", len(records)),
+        ("排除项数据行数", sum(1 for r in records if r["is_excluded"])),
+        ("生成合并文件数", len(output_files)),
+        ("", ""),
+        ("输出文件清单", ""),
+    ]
+    for path in sorted(output_files):
+        basename = os.path.basename(path)
+        group_rows = sum(1 for r in records if r["output_file"] == basename)
+        summary_rows.append((basename, f"{group_rows} 行"))
+
+    for r, (label, val) in enumerate(summary_rows, 1):
+        c1 = ws2.cell(r, 1, label)
+        c2 = ws2.cell(r, 2, val)
+        if r == 1:
+            c1.font = header_font
+            c1.fill = header_fill
+            c2.font = header_font
+            c2.fill = header_fill
+        if label == "":
+            c1.font = Font(size=8)
+            c2.font = Font(size=8)
+    ws2.column_dimensions['A'].width = 60
+    ws2.column_dimensions['B'].width = 20
+
+    wb.save(out_path)
+    return out_path
 
 
 def convert_bank_format(bank_dir, output_dir):
