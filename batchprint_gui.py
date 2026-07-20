@@ -538,12 +538,12 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                 ym_suffix = ""
 
             seq_prefix = str(group_idx).zfill(pad_width)
+            banks_in_sub = sorted(set(r[1] for r in sub_recs), key=_bank_sort)
 
             if filename_simple:
                 parts = [group_key, ym_suffix] if ym_suffix else [group_key]
                 merged_name = "-".join(parts) + ".xlsx"
             else:
-                banks_in_sub = sorted(set(r[1] for r in sub_recs), key=_bank_sort)
                 bank_parts = []
                 for b in banks_in_sub:
                     count = bank_counts.get(b, 0)
