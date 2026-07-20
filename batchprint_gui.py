@@ -325,17 +325,20 @@ def is_excluded(unit_name):
 
 def get_big_org(unit_name):
     rules = _load_mapping_rules()
-    if is_excluded(unit_name):
-        return unit_name, unit_name
     for match_type, pattern, big_org, excluded in rules:
-        if excluded:
-            continue
+        matched = False
         if match_type == "prefix" and unit_name.startswith(pattern):
+            matched = True
+        elif match_type == "exact" and unit_name == pattern:
+            matched = True
+        elif match_type == "contains" and pattern in unit_name:
+            matched = True
+        if not matched:
+            continue
+        # 排除项若有映射的大单位名则保留，否则回退到源单位名
+        if big_org:
             return big_org, unit_name
-        if match_type == "exact" and unit_name == pattern:
-            return big_org, unit_name
-        if match_type == "contains" and pattern in unit_name:
-            return big_org, unit_name
+        return unit_name, unit_name
     return unit_name, unit_name
 
 
@@ -501,7 +504,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                         "name": str(row_data[1]).strip() if row_data[1] else "",
                         "id_number": str(row_data[2]).strip() if row_data[2] else "",
                         "amount": row_data[3],
-                        "big_org": group_key,
+                        "big_org": rec_big_org or group_key,
                         "is_excluded": rec_excluded,
                         "output_file": "",
                         "output_seq": 0,
@@ -628,6 +631,33 @@ def merge_bank_files_advanced(bank_dir, output_dir,
 
     if skip_files:
         warnings_list.append(f"以下 {len(skip_files)} 个文件文件名不符合格式，已跳过：{', '.join(skip_files[:5])}")
+
+    # 全局重复报盘检测（跨文件/跨子组，按大单位归类）
+    if all_operation_records:
+        dup_groups = defaultdict(list)
+        for rec in all_operation_records:
+            if rec.get("filtered_reason"):
+                continue
+            person = str(rec.get("id_number", "")).strip()
+            account = str(rec.get("name", "")).strip()
+            if not person and not account:
+                continue
+            key = (rec["source_yearmon"], rec["big_org"],
+                   person or "", account or "", float(rec["amount"]))
+            dup_groups[key].append(rec)
+        for key, recs in dup_groups.items():
+            if len(recs) > 1:
+                for r in recs:
+                    r["dup_warning"] = True
+                ym, big_org, person, account, amount = key
+                source_files = sorted(set(r["source_file"] for r in recs))
+                acct_display = f" 账号{account}" if account else ""
+                warnings_list.append(
+                    f"可能重复报盘：{big_org} 月份{ym} "
+                    f"户名「{person}」{acct_display}金额{float(amount):.2f}元 "
+                    f"在{len(recs)}条记录中出现"
+                    f"（来源：{'、'.join(source_files)}），请确认是否重复报盘"
+                )
 
     # 操作记录排序：重复行相邻排列
     if all_operation_records:
