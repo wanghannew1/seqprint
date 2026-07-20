@@ -531,6 +531,8 @@ def merge_bank_files_advanced(bank_dir, output_dir,
             dup_warnings = {k: v for k, v in dup_groups.items() if len(v) > 1}
             if dup_warnings:
                 for (ym, unit, person, account, amount), recs in dup_warnings.items():
+                    for r in recs:
+                        r["dup_warning"] = True
                     source_files = sorted(set(r["source_file"] for r in recs))
                     acct_display = f" 账号{account}" if account else ""
                     warnings_list.append(
@@ -627,6 +629,24 @@ def merge_bank_files_advanced(bank_dir, output_dir,
     if skip_files:
         warnings_list.append(f"以下 {len(skip_files)} 个文件文件名不符合格式，已跳过：{', '.join(skip_files[:5])}")
 
+    # 操作记录排序：重复行相邻排列
+    if all_operation_records:
+        dup_groups = defaultdict(list)
+        non_dup = []
+        for rec in all_operation_records:
+            if rec.get("dup_warning"):
+                person = str(rec.get("id_number", "")).strip()
+                account = str(rec.get("name", "")).strip()
+                key = (rec["source_yearmon"], rec["source_unit"], person or "", account or "", float(rec.get("amount", 0)))
+                dup_groups[key].append(rec)
+            else:
+                non_dup.append(rec)
+        dup_group_list = sorted(dup_groups.items(), key=lambda x: x[0])
+        sorted_records = non_dup[:]
+        for _, recs in dup_group_list:
+            sorted_records.extend(recs)
+        all_operation_records[:] = sorted_records
+
     # 生成操作记录 Excel
     if all_operation_records:
         op_record_path = _generate_operation_record(output_dir, all_operation_records, stats, output_files)
@@ -693,12 +713,18 @@ def _generate_operation_record(output_dir, records, stats, output_files):
         ws.cell(r, 11, "是" if rec["is_excluded"] else "").alignment = data_align
         ws.cell(r, 12, rec["output_file"]).alignment = data_align
         ws.cell(r, 13, rec["output_seq"]).alignment = data_align
-        filtered = rec.get("filtered_reason", "")
-        ws.cell(r, 14, filtered).alignment = data_align
+        notes = []
+        if rec.get("filtered_reason"):
+            notes.append(rec["filtered_reason"])
+        if rec.get("dup_warning"):
+            notes.append("可能重复报盘")
+        ws.cell(r, 14, "；".join(notes) if notes else "").alignment = data_align
         for c in range(1, 15):
             ws.cell(r, c).border = Border(top=thin, bottom=thin, left=thin, right=thin)
-            if filtered:
+            if rec.get("filtered_reason"):
                 ws.cell(r, c).fill = PatternFill("solid", fgColor="FCE4EC")
+            elif rec.get("dup_warning"):
+                ws.cell(r, c).fill = PatternFill("solid", fgColor="FFF9C4")
             elif rec["is_excluded"]:
                 ws.cell(r, c).fill = PatternFill("solid", fgColor="F2F2F2")
 
