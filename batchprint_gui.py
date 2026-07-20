@@ -582,6 +582,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
             ws["B2"] = total_amount
             ws["B2"].number_format = "0.00"
             ws["B3"] = len(all_rows)
+            wb.active = wb.sheetnames.index("合并报盘")
             wb.save(merged_path)
             output_files.append(merged_path)
 
