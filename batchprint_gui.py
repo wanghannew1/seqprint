@@ -542,7 +542,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                         f"可能重复报盘：{big_org} 月份{ym} "
                         f"户名「{person}」{acct_display}金额{float(amount):.2f}元 "
                         f"在{len(recs)}条记录中出现"
-                        f"（来源：{'、'.join(source_files)}），请确认是否重复报盘"
+                        f"（来源：{'、'.join(source_files)}），详见操作记录末尾"
                     )
 
             if not all_rows:
@@ -656,7 +656,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                     f"可能重复报盘：{big_org} 月份{ym} "
                     f"户名「{person}」{acct_display}金额{float(amount):.2f}元 "
                     f"在{len(recs)}条记录中出现"
-                    f"（来源：{'、'.join(source_files)}），请确认是否重复报盘"
+                    f"（来源：{'、'.join(source_files)}），详见操作记录末尾"
                 )
 
     # 操作记录排序：重复行相邻排列
@@ -3829,7 +3829,7 @@ class BatchPrintGUI:
                 self.log(f"    - {w}")
             dup_warnings = [w for w in warnings if "可能重复报盘" in w]
             if dup_warnings:
-                msg = f"发现 {len(dup_warnings)} 条可能重复报盘记录，请在输出目录查看操作记录确认:\n\n"
+                msg = f"发现 {len(dup_warnings)} 条可能重复报盘记录（重复行已排列在操作记录末尾）:\n\n"
                 msg += "\n".join(f"• {w}" for w in dup_warnings[:5])
                 if len(dup_warnings) > 5:
                     msg += f"\n... 及另外 {len(dup_warnings) - 5} 条"
