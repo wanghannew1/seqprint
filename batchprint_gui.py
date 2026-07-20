@@ -773,7 +773,6 @@ def convert_bank_format(bank_dir, output_dir):
 
     tmpl = openpyxl.load_workbook(tmpl_path)
     ws = tmpl["代发工资模板"]
-    ws.title = "合并报盘"
 
     # 清除示例数据行
     for r in range(5, 8):
