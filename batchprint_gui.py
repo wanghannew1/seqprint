@@ -343,6 +343,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                               merge_different_banks=True,
                               merge_different_months=True,
                               merge_by_big_org=True,
+                              filename_simple=True,
                               progress_callback=None):
     """
     高级合并银行报盘文件，支持三种合并策略开关。
@@ -372,12 +373,13 @@ def merge_bank_files_advanced(bank_dir, output_dir,
     if not bank_files:
         return [], ["目录中未找到 .xls 文件"], {}
 
-    if progress_callback:
-        opts = []
-        opts.append("同单位不同银行合并" if merge_different_banks else "同单位不同银行拆开")
-        opts.append("同单位不同月份合并" if merge_different_months else "同单位不同月份拆开")
-        opts.append("按大单位合并" if merge_by_big_org else "不按大单位合并")
-        progress_callback(0, 1, f"扫描到 {len(bank_files)} 个报盘文件，规则：{'、'.join(opts)}")
+        if progress_callback:
+            opts = []
+            opts.append("同单位不同银行合并" if merge_different_banks else "同单位不同银行拆开")
+            opts.append("同单位不同月份合并" if merge_different_months else "同单位不同月份拆开")
+            opts.append("按大单位合并" if merge_by_big_org else "不按大单位合并")
+            opts.append("简洁文件名" if filename_simple else "详细文件名")
+            progress_callback(0, 1, f"扫描到 {len(bank_files)} 个报盘文件，规则：{'、'.join(opts)}")
 
     file_records = []
     skip_files = []
@@ -520,7 +522,6 @@ def merge_bank_files_advanced(bank_dir, output_dir,
             for i, row in enumerate(all_rows, 1):
                 row[0] = i
 
-            seq_prefix = str(group_idx).zfill(pad_width)
             sorted_ym = sorted(yearmons_in_sub)
             if len(sorted_ym) == 1:
                 ym_suffix = sorted_ym[0]
@@ -536,27 +537,33 @@ def merge_bank_files_advanced(bank_dir, output_dir,
             else:
                 ym_suffix = ""
 
-            banks_in_sub = sorted(set(r[1] for r in sub_recs), key=_bank_sort)
-            bank_parts = []
-            for b in banks_in_sub:
-                count = bank_counts.get(b, 0)
-                bank_parts.append(f"{b}{count}笔")
-            bank_suffix = "_".join(bank_parts)
+            seq_prefix = str(group_idx).zfill(pad_width)
 
-            total_fen = 0
-            for row in all_rows:
-                amt = row[3]
-                if isinstance(amt, Decimal):
-                    total_fen += int(amt * 100)
-                else:
-                    total_fen += int(round(float(amt) * 100))
-            yuan = total_fen // 100
-            jiao = (total_fen % 100) // 10
-            fen = total_fen % 10
+            if filename_simple:
+                parts = [f"{seq_prefix}_{group_key}", ym_suffix] if ym_suffix else [f"{seq_prefix}_{group_key}"]
+                merged_name = "-".join(parts) + ".xlsx"
+            else:
+                banks_in_sub = sorted(set(r[1] for r in sub_recs), key=_bank_sort)
+                bank_parts = []
+                for b in banks_in_sub:
+                    count = bank_counts.get(b, 0)
+                    bank_parts.append(f"{b}{count}笔")
+                bank_suffix = "_".join(bank_parts)
 
-            parts = [f"{seq_prefix}_{group_key}", ym_suffix, bank_suffix,
-                     f"总数{len(all_rows)}笔", f"总计{yuan}元{jiao}角{fen}分"]
-            merged_name = "-".join(parts) + ".xlsx"
+                total_fen = 0
+                for row in all_rows:
+                    amt = row[3]
+                    if isinstance(amt, Decimal):
+                        total_fen += int(amt * 100)
+                    else:
+                        total_fen += int(round(float(amt) * 100))
+                yuan = total_fen // 100
+                jiao = (total_fen % 100) // 10
+                fen = total_fen % 10
+
+                parts = [f"{seq_prefix}_{group_key}", ym_suffix, bank_suffix,
+                         f"总数{len(all_rows)}笔", f"总计{yuan}元{jiao}角{fen}分"]
+                merged_name = "-".join(parts) + ".xlsx"
             merged_path = os.path.join(output_dir, merged_name)
 
             wb = openpyxl.load_workbook(bank_tmpl_path)
@@ -3709,6 +3716,7 @@ class BatchPrintGUI:
         self.log(f"    - 同单位不同银行合并：{'✓' if opts['merge_banks'] else '✗'}")
         self.log(f"    - 同单位不同月份合并：{'✓' if opts['merge_months'] else '✗'}")
         self.log(f"    - 按大单位合并：{'✓' if opts['merge_big_org'] else '✗'}")
+        self.log(f"    - 文件名格式：{'简洁（大单位名+月份）' if opts['filename_simple'] else '详细（含序号+银行笔数+总金额）'}")
 
         def progress_cb(current, total, message):
             self.log(f"  [{current}/{total}] {message}")
@@ -3720,6 +3728,7 @@ class BatchPrintGUI:
                 merge_different_banks=opts["merge_banks"],
                 merge_different_months=opts["merge_months"],
                 merge_by_big_org=opts["merge_big_org"],
+                filename_simple=opts["filename_simple"],
                 progress_callback=progress_cb,
             )
         except Exception as e:
@@ -4344,6 +4353,7 @@ class MergeOptionsDialog:
             "merge_banks": True,
             "merge_months": True,
             "merge_big_org": True,
+            "filename_simple": True,
         }
 
         self.dialog = tk.Toplevel(parent)
@@ -4377,10 +4387,26 @@ class MergeOptionsDialog:
                      anchor=tk.W).pack(anchor=tk.W, padx=(24, 0))
 
         tk.Frame(main, height=1, bd=1, relief=tk.SUNKEN).pack(fill=tk.X, pady=10)
+
+        tk.Label(main, text="文件名格式：",
+                 font=("微软雅黑", 10, "bold"), anchor=tk.W).pack(fill=tk.X, pady=(0, 6))
+        self.filename_var = tk.StringVar(value="simple")
+        for fval, flabel, fdesc in [
+            ("simple", "简洁（推荐）", "大单位名-月份.xlsx"),
+            ("full", "详细", "序号_大单位名-月份-银行笔数-总数-总金额.xlsx"),
+        ]:
+            frame = tk.Frame(main)
+            frame.pack(fill=tk.X, pady=2)
+            rb = tk.Radiobutton(frame, text=flabel, variable=self.filename_var,
+                                value=fval, font=("微软雅黑", 10))
+            rb.pack(anchor=tk.W, side=tk.LEFT)
+            tk.Label(frame, text=fdesc, font=("微软雅黑", 9), fg="#888",
+                     anchor=tk.W).pack(anchor=tk.W, side=tk.LEFT, padx=(6, 0))
+
+        tk.Frame(main, height=1, bd=1, relief=tk.SUNKEN).pack(fill=tk.X, pady=10)
         info_text = (
             "说明：\n"
             "• 排除项（外包业务等）不参与按大单位合并，独立生成文件\n"
-            "• 文件命名规则：序号_组名-年月-银行名笔数-总数-总计金额.xlsx\n"
             "• 输出格式：吉林银行代发业务导入模板\n"
             "• 金额为 0 的数据：不写入输出报盘，在操作记录.xlsx 中保留"
         )
@@ -4413,6 +4439,7 @@ class MergeOptionsDialog:
             "merge_banks": self.vars["merge_banks"].get(),
             "merge_months": self.vars["merge_months"].get(),
             "merge_big_org": self.vars["merge_big_org"].get(),
+            "filename_simple": self.filename_var.get() == "simple",
         }
         self.cancelled = False
         self.dialog.destroy()
