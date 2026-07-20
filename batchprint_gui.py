@@ -260,10 +260,10 @@ def merge_bank_files(renamed_list, bank_dir, output_dir):
 
 # ── 映射规则：从 6月银行导入模板分类清单.xlsx 的「映射规则」sheet 读取 ──
 _MAPPING_EXCEL = None
+_MAPPING_RULES_CACHE = None
 
 
 def _get_mapping_excel_path():
-    """返回映射规则 Excel 的路径（与脚本同目录）"""
     global _MAPPING_EXCEL
     if _MAPPING_EXCEL is None:
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -272,28 +272,30 @@ def _get_mapping_excel_path():
 
 
 def _load_mapping_rules():
-    """从 Excel「映射规则」sheet 加载规则列表。
-
-    返回 list[ (match_type, pattern, big_org, is_excluded) ]
-    """
+    global _MAPPING_RULES_CACHE
+    if _MAPPING_RULES_CACHE is not None:
+        return _MAPPING_RULES_CACHE
     import openpyxl
     excel_path = _get_mapping_excel_path()
     if not os.path.exists(excel_path):
-        return []
+        _MAPPING_RULES_CACHE = []
+        return _MAPPING_RULES_CACHE
     try:
         wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
     except Exception:
-        return []
+        _MAPPING_RULES_CACHE = []
+        return _MAPPING_RULES_CACHE
     if "映射规则" not in wb.sheetnames:
         wb.close()
-        return []
+        _MAPPING_RULES_CACHE = []
+        return _MAPPING_RULES_CACHE
     ws = wb["映射规则"]
     rules = []
     for r in range(2, ws.max_row + 1):
-        match_type = ws.cell(r, 2).value  # B: 匹配方式
-        pattern = ws.cell(r, 3).value     # C: 模式
-        big_org = ws.cell(r, 4).value     # D: 大单位名
-        excluded = ws.cell(r, 5).value    # E: 是否排除
+        match_type = ws.cell(r, 2).value
+        pattern = ws.cell(r, 3).value
+        big_org = ws.cell(r, 4).value
+        excluded = ws.cell(r, 5).value
         if not pattern or not match_type:
             continue
         rules.append((
@@ -303,6 +305,7 @@ def _load_mapping_rules():
             str(excluded).strip() == "Y",
         ))
     wb.close()
+    _MAPPING_RULES_CACHE = rules
     return rules
 
 
