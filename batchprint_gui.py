@@ -624,7 +624,7 @@ def _generate_operation_record(output_dir, records, stats, output_files):
 
     headers = [
         "序号", "源文件名", "源单位名", "源银行", "源月份",
-        "源文件行号", "姓名", "身份证号", "金额",
+        "源文件行号", "收款户名", "收款账号", "金额",
         "归类大单位", "是否排除",
         "输出文件名", "输出文件行号",
     ]
