@@ -373,7 +373,11 @@ def merge_bank_files_advanced(bank_dir, output_dir,
         return [], ["目录中未找到 .xls 文件"], {}
 
     if progress_callback:
-        progress_callback(0, 1, f"扫描到 {len(bank_files)} 个报盘文件")
+        opts = []
+        opts.append("同单位不同银行合并" if merge_different_banks else "同单位不同银行拆开")
+        opts.append("同单位不同月份合并" if merge_different_months else "同单位不同月份拆开")
+        opts.append("按大单位合并" if merge_by_big_org else "不按大单位合并")
+        progress_callback(0, 1, f"扫描到 {len(bank_files)} 个报盘文件，规则：{'、'.join(opts)}")
 
     file_records = []
     skip_files = []
@@ -430,11 +434,11 @@ def merge_bank_files_advanced(bank_dir, output_dir,
         return order.get(b, 99)
 
     for group_idx, (group_key, recs) in enumerate(sorted(groups.items()), 1):
-        if progress_callback:
-            progress_callback(group_idx, total_groups, f"处理: {group_key}")
-
         all_banks = sorted(set(r[1] for r in recs), key=_bank_sort)
         all_yearmons = sorted(set(r[0] for r in recs))
+        if progress_callback:
+            progress_callback(group_idx, total_groups,
+                              f"合并: {group_key}（{len(recs)}个文件，{len(all_yearmons)}个月份，{len(all_banks)}家银行）")
 
         sub_groups = {}
         for rec in recs:
@@ -483,6 +487,10 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                     rows = _read_ccb_rows(fpath, warnings_list)
                 elif bt == "jlb":
                     rows = _read_jlb_rows(fpath, warnings_list)
+                    before = len(rows)
+                    rows = [r for r in rows if r[3] is not None and float(r[3]) > 0]
+                    if len(rows) < before:
+                        warnings_list.append(f"吉林银行 {fname}: 过滤 {before - len(rows)} 条金额为0的数据")
                 else:
                     continue
                 for row_data in rows:
