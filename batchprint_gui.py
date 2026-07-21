@@ -408,6 +408,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
 
     file_records = []
     skip_files = []
+    warnings_list = []
     for fname in sorted(bank_files):
         try:
             yearmon, bank, unit_name = split_filename(fname)
@@ -441,7 +442,6 @@ def merge_bank_files_advanced(bank_dir, output_dir,
     if not os.path.exists(bank_tmpl_path):
         return [], [f"模板文件不存在: {bank_tmpl_path}"], {}
 
-    warnings_list = []
     file_dedup_log = []  # 跟踪文件级去重决策（跨子组+同子组）
     global_fp_cache = defaultdict(dict)  # big_org → {frozenset: filename} 跨子组文件签名缓存
     output_files = []
