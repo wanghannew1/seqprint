@@ -417,6 +417,9 @@ def merge_bank_files_advanced(bank_dir, output_dir,
             skip_files.append(fname)
 
     if skip_files:
+        msg = "以下文件文件名不符合格式（缺少年月或银行），已跳过不处理：\n\n"
+        msg += "\n".join(f"• {f}" for f in skip_files)
+        messagebox.showwarning("文件名不合规", msg)
         warnings_list.append(f"以下 {len(skip_files)} 个文件文件名不符合格式，已跳过：{', '.join(skip_files[:5])}")
 
     if not file_records:
@@ -4143,11 +4146,6 @@ class BatchPrintGUI:
             self.log_warning(f"  ⚠ 警告 ({len(warnings)} 条)：")
             for w in warnings:
                 self.log_warning(f"    - {w}")
-            skip_warnings = [w for w in warnings if "文件名不符合格式" in w]
-            if skip_warnings:
-                msg = "以下文件文件名不符合格式（缺少年月或银行），已跳过不处理：\n\n"
-                msg += "\n".join(f"• {w}" for w in skip_warnings)
-                messagebox.showwarning("文件名不合规", msg)
             dup_warnings = [w for w in warnings if "可能重复报盘" in w]
             if dup_warnings:
                 msg = f"发现 {len(dup_warnings)} 条可能重复报盘记录（重复行已排列在操作记录末尾）:\n\n"
