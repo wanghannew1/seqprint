@@ -410,6 +410,15 @@ def merge_bank_files_advanced(bank_dir, output_dir,
     file_records = []
     skip_files = []
     warnings_list = []
+    file_dedup_log = []  # 跟踪文件级去重决策（跨子组+同子组）
+    global_fp_cache = defaultdict(dict)  # big_org → {frozenset: filename} 跨子组文件签名缓存
+
+    def _warn(msg):
+        """追加警告到列表，同时通过回调实时输出"""
+        warnings_list.append(msg)
+        if warning_callback:
+            warning_callback(msg)
+
     for fname in sorted(bank_files):
         try:
             yearmon, bank, unit_name = split_filename(fname)
@@ -446,14 +455,6 @@ def merge_bank_files_advanced(bank_dir, output_dir,
     if not os.path.exists(bank_tmpl_path):
         return [], [f"模板文件不存在: {bank_tmpl_path}"], {}
 
-    file_dedup_log = []  # 跟踪文件级去重决策（跨子组+同子组）
-    global_fp_cache = defaultdict(dict)  # big_org → {frozenset: filename} 跨子组文件签名缓存
-
-    def _warn(msg):
-        """追加警告到列表，同时通过回调实时输出"""
-        warnings_list.append(msg)
-        if warning_callback:
-            warning_callback(msg)
     output_files = []
     all_operation_records = []  # 收集每条数据的来龙去脉
     stats = {
