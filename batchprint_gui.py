@@ -550,7 +550,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                 a = str(rec.get("name", "")).strip()
                 if not p and not a:
                     continue
-                file_sigs[rec["source_file"]].append((p or "", a or "", float(rec["amount"])))
+                file_sigs[rec["source_file"]].append((rec["source_yearmon"], p or "", a or "", float(rec["amount"])))
             skip_files_set = set()
             fp_cache = {}
             for fname in sorted(file_sigs):
