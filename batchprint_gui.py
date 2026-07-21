@@ -367,7 +367,8 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                               merge_by_big_org=True,
                               filename_simple=True,
                                progress_callback=None,
-                               dedup_callback=None):
+                               dedup_callback=None,
+                               warning_callback=None):
     """
     高级合并银行报盘文件，支持三种合并策略开关。
 
@@ -420,7 +421,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
         msg = "以下文件文件名不符合格式（缺少年月或银行），已跳过不处理：\n\n"
         msg += "\n".join(f"• {f}" for f in skip_files)
         messagebox.showwarning("文件名不合规", msg)
-        warnings_list.append(f"以下 {len(skip_files)} 个文件文件名不符合格式，已跳过：{', '.join(skip_files[:5])}")
+        _warn(f"以下 {len(skip_files)} 个文件文件名不符合格式，已跳过：{', '.join(skip_files[:5])}")
 
     if not file_records:
         return [], ["所有文件均无法解析文件名"], {}
@@ -447,6 +448,12 @@ def merge_bank_files_advanced(bank_dir, output_dir,
 
     file_dedup_log = []  # 跟踪文件级去重决策（跨子组+同子组）
     global_fp_cache = defaultdict(dict)  # big_org → {frozenset: filename} 跨子组文件签名缓存
+
+    def _warn(msg):
+        """追加警告到列表，同时通过回调实时输出"""
+        warnings_list.append(msg)
+        if warning_callback:
+            warning_callback(msg)
     output_files = []
     all_operation_records = []  # 收集每条数据的来龙去脉
     stats = {
@@ -592,10 +599,10 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                         action = dedup_callback(dedup_target, keep_target)
                     if action == "skip_dup":
                         skip_files_set.add(dedup_target)
-                        warnings_list.append(f"文件重复已去重：{dedup_target} 与 {keep_target} 内容完全相同，已剔除 {dedup_target}")
+                        _warn(f"文件重复已去重：{dedup_target} 与 {keep_target} 内容完全相同，已剔除 {dedup_target}")
                         file_dedup_log.append({"dedup_file": dedup_target, "keep_file": keep_target, "action": "已剔除"})
                     else:
-                        warnings_list.append(f"文件重复（已保留两份）：{fname} 与 {origin} 内容完全相同")
+                        _warn(f"文件重复（已保留两份）：{fname} 与 {origin} 内容完全相同")
                         file_dedup_log.append({"dedup_file": fname, "keep_file": origin, "action": "已保留两份"})
                     continue
 
@@ -612,10 +619,10 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                         action = dedup_callback(dedup_target, keep_target)
                     if action == "skip_dup":
                         skip_files_set.add(dedup_target)
-                        warnings_list.append(f"文件重复已去重：{dedup_target} 与 {keep_target} 内容完全相同，已剔除 {dedup_target}")
+                        _warn(f"文件重复已去重：{dedup_target} 与 {keep_target} 内容完全相同，已剔除 {dedup_target}")
                         file_dedup_log.append({"dedup_file": dedup_target, "keep_file": keep_target, "action": "已剔除"})
                     else:
-                        warnings_list.append(f"文件重复（已保留两份）：{fname} 与 {origin} 内容完全相同")
+                        _warn(f"文件重复（已保留两份）：{fname} 与 {origin} 内容完全相同")
                         file_dedup_log.append({"dedup_file": fname, "keep_file": origin, "action": "已保留两份"})
                 else:
                     local_fp_cache[fp] = fname
@@ -666,7 +673,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                         r["dup_warning"] = True
                     source_files = sorted(set(r["source_file"] for r in recs))
                     acct_display = f" 账号{account}" if account else ""
-                    warnings_list.append(
+                    _warn(
                         f"可能重复报盘：{big_org} 月份{ym} "
                         f"户名「{person}」{acct_display}金额{float(amount):.2f}元 "
                         f"在{len(recs)}条记录中出现"
@@ -806,7 +813,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                 ym, big_org, person, account, amount = key
                 source_files = sorted(set(r["source_file"] for r in recs))
                 acct_display = f" 账号{account}" if account else ""
-                warnings_list.append(
+                _warn(
                     f"可能重复报盘：{big_org} 月份{ym} "
                     f"户名「{person}」{acct_display}金额{float(amount):.2f}元 "
                     f"在{len(recs)}条记录中出现"
@@ -854,7 +861,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                 if len(group) >= 2:
                     seen_groups.append(group)
             for group in seen_groups:
-                warnings_list.append(
+                _warn(
                     f"文件级重复（可能为文件复制）：以下 {len(group)} 个文件内容完全相同 "
                     f"（{'、'.join(group)}），请确认是否重复报盘"
                 )
@@ -883,7 +890,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
         skip_files_list = stats.get("skip_files_list", [])
         op_record_path = _generate_operation_record(output_dir, all_operation_records, stats, output_files, file_dedup_log, skip_files_list)
         if op_record_path:
-            warnings_list.append(f"操作记录已生成: {os.path.basename(op_record_path)}")
+            _warn(f"操作记录已生成: {os.path.basename(op_record_path)}")
 
     if progress_callback:
         progress_callback(total_groups, total_groups, f"完成！生成 {len(output_files)} 个合并文件")
@@ -4128,6 +4135,7 @@ class BatchPrintGUI:
                 filename_simple=opts["filename_simple"],
                 progress_callback=progress_cb,
                 dedup_callback=_dedup_ask,
+                warning_callback=lambda msg: self.log_warning(f"  ⚠ {msg}"),
             )
         except Exception as e:
             self.log(f"  ✗ 合并失败：{e}")
