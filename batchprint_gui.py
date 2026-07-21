@@ -559,12 +559,19 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                     continue
                 if fp in fp_cache:
                     origin = fp_cache[fp]
+                    # 优先建议剔除带复制后缀的文件
+                    stem_dup = os.path.splitext(fname)[0]
+                    stem_org = os.path.splitext(origin)[0]
+                    if stem_org != _normalize_unit_name(stem_org) and stem_dup == _normalize_unit_name(stem_dup):
+                        dedup_target, keep_target = origin, fname
+                    else:
+                        dedup_target, keep_target = fname, origin
                     action = "keep_both"
                     if dedup_callback:
-                        action = dedup_callback(fname, origin)
+                        action = dedup_callback(dedup_target, keep_target)
                     if action == "skip_dup":
-                        skip_files_set.add(fname)
-                        warnings_list.append(f"文件重复已去重：{fname} 与 {origin} 内容完全相同，已剔除 {fname}")
+                        skip_files_set.add(dedup_target)
+                        warnings_list.append(f"文件重复已去重：{dedup_target} 与 {keep_target} 内容完全相同，已剔除 {dedup_target}")
                     else:
                         warnings_list.append(f"文件重复（已保留两份）：{fname} 与 {origin} 内容完全相同")
                 else:
