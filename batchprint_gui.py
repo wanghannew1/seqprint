@@ -366,7 +366,8 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                               merge_different_months=True,
                               merge_by_big_org=True,
                               filename_simple=True,
-                              progress_callback=None):
+                              progress_callback=None,
+                              dedup_callback=None):
     """
     高级合并银行报盘文件，支持三种合并策略开关。
 
@@ -377,6 +378,8 @@ def merge_bank_files_advanced(bank_dir, output_dir,
         merge_different_months: True=同单位不同月份合并到同一文件
         merge_by_big_org: True=按大单位合并
         progress_callback: (current, total, message)
+        dedup_callback: (file_a, file_b) → 'keep_both' | 'skip_dup'
+                        文件内容完全相同时的用户选择回调
 
     返回:
         (output_files, warnings, stats)
@@ -555,8 +558,15 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                 if not fp:
                     continue
                 if fp in fp_cache:
-                    skip_files_set.add(fname)
-                    warnings_list.append(f"文件重复已去重：{fname} 与 {fp_cache[fp]} 内容完全相同，已跳过")
+                    origin = fp_cache[fp]
+                    action = "keep_both"
+                    if dedup_callback:
+                        action = dedup_callback(fname, origin)
+                    if action == "skip_dup":
+                        skip_files_set.add(fname)
+                        warnings_list.append(f"文件重复已去重：{fname} 与 {origin} 内容完全相同，已剔除 {fname}")
+                    else:
+                        warnings_list.append(f"文件重复（已保留两份）：{fname} 与 {origin} 内容完全相同")
                 else:
                     fp_cache[fp] = fname
             if skip_files_set:
@@ -3930,6 +3940,21 @@ class BatchPrintGUI:
             self.log(f"  [{current}/{total}] {message}")
             self.root.update()
 
+        def _dedup_ask(dup_file, origin_file):
+            btn = messagebox.askyesnocancel(
+                "发现重复文件",
+                f"以下两个文件内容完全相同：\n\n"
+                f"  {dup_file}\n  {origin_file}\n\n"
+                f"是否剔除重复文件「{dup_file}」？\n"
+                f"「是」= 剔除重复，只保留一份\n"
+                f"「否」= 保留两份\n"
+                f"「取消」= 中止合并",
+                parent=self.root,
+            )
+            if btn is None:
+                raise Exception("用户已取消合并")
+            return "skip_dup" if btn else "keep_both"
+
         try:
             output_files, warnings, stats = merge_bank_files_advanced(
                 self.bank_dir, self.output_dir,
@@ -3938,6 +3963,7 @@ class BatchPrintGUI:
                 merge_by_big_org=opts["merge_big_org"],
                 filename_simple=opts["filename_simple"],
                 progress_callback=progress_cb,
+                dedup_callback=_dedup_ask,
             )
         except Exception as e:
             self.log(f"  ✗ 合并失败：{e}")
