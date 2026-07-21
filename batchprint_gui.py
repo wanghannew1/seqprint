@@ -3685,7 +3685,8 @@ class BatchPrintGUI:
 
         self.bank_dir = None
         self.payroll_dir = None
-        self.output_dir = None
+        self.bank_output_dir = None
+        self.payroll_output_dir = None
 
         self._build_ui()
 
@@ -3711,23 +3712,16 @@ class BatchPrintGUI:
         tk.Button(dir_frame, text="选择工资表目录", command=self.select_payroll_dir, width=18).grid(
             row=0, column=1, padx=8, pady=4
         )
-        tk.Button(dir_frame, text="选择输出目录", command=self.select_output_dir, width=18).grid(
-            row=0, column=2, padx=8, pady=4
-        )
 
         # 路径显示
         self.bank_dir_label = tk.Label(dir_frame, text="银行报盘目录：未选择", anchor=tk.W, fg="#555")
-        self.bank_dir_label.grid(row=1, column=0, columnspan=3, sticky=tk.EW, pady=2)
+        self.bank_dir_label.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=2)
 
         self.payroll_dir_label = tk.Label(dir_frame, text="工资表目录：未选择", anchor=tk.W, fg="#555")
-        self.payroll_dir_label.grid(row=2, column=0, columnspan=3, sticky=tk.EW, pady=2)
-
-        self.output_dir_label = tk.Label(dir_frame, text="输出目录：未选择", anchor=tk.W, fg="#555")
-        self.output_dir_label.grid(row=3, column=0, columnspan=3, sticky=tk.EW, pady=2)
+        self.payroll_dir_label.grid(row=2, column=0, columnspan=2, sticky=tk.EW, pady=2)
 
         dir_frame.columnconfigure(0, weight=1)
         dir_frame.columnconfigure(1, weight=1)
-        dir_frame.columnconfigure(2, weight=1)
 
         # ── 按钮区域（目录选择和日志之间） ──
         btn_box = tk.Frame(self.root, padx=12, pady=10)
@@ -3910,34 +3904,35 @@ class BatchPrintGUI:
 
     # ── 目录选择 ──────────────────────────────
 
-    def _set_default_output_dir(self):
-        """根据银行报盘目录自动设置输出目录（同级目录）"""
+    def _set_default_bank_output_dir(self):
         if not self.bank_dir:
             return
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         parent = os.path.dirname(self.bank_dir)
-        default_dir = os.path.join(parent, f"合并后的银行报盘_{ts}")
-        self.output_dir = default_dir
-        self.output_dir_label.config(text=f"输出目录：{default_dir}")
+        self.bank_output_dir = os.path.join(parent, f"合并后的银行报盘_{ts}")
+
+    def _set_default_payroll_output_dir(self):
+        if not self.payroll_dir:
+            return
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        parent = os.path.dirname(self.payroll_dir)
+        self.payroll_output_dir = os.path.join(parent, f"合并后的工资表_{ts}")
 
     def select_bank_dir(self):
         d = filedialog.askdirectory(title="选择银行报盘目录")
         if d:
             self.bank_dir = os.path.normpath(d)
             self.bank_dir_label.config(text=f"银行报盘目录：{os.path.normpath(d)}")
-            self._set_default_output_dir()
+            self._set_default_bank_output_dir()
+            self.log(f"报盘输出目录：{self.bank_output_dir}")
 
     def select_payroll_dir(self):
         d = filedialog.askdirectory(title="选择工资表目录")
         if d:
             self.payroll_dir = os.path.normpath(d)
             self.payroll_dir_label.config(text=f"工资表目录：{os.path.normpath(d)}")
-
-    def select_output_dir(self):
-        d = filedialog.askdirectory(title="选择输出目录")
-        if d:
-            self.output_dir = os.path.normpath(d)
-            self.output_dir_label.config(text=f"输出目录：{os.path.normpath(d)}")
+            self._set_default_payroll_output_dir()
+            self.log(f"工资表输出目录：{self.payroll_output_dir}")
 
     # ── 进度控制 ──────────────────────────────
 
@@ -3964,7 +3959,7 @@ class BatchPrintGUI:
         # 步骤 1：改名银行报盘文件
         self.log("【步骤1】改名银行报盘文件...")
         try:
-            renamed = rename_bank_files(self.bank_dir, self.output_dir)
+            renamed = rename_bank_files(self.bank_dir, self.bank_output_dir)
             self.log(f"  ✓ 改名完成：{len(renamed)} 个文件")
         except Exception as e:
             self.log(f"  ✗ 改名失败：{e}")
@@ -3974,7 +3969,7 @@ class BatchPrintGUI:
         # 步骤 2：合并银行报盘文件
         self.log("【步骤2】合并银行报盘文件...")
         try:
-            merged, merge_warnings = merge_bank_files(renamed, self.bank_dir, self.output_dir)
+            merged, merge_warnings = merge_bank_files(renamed, self.bank_dir, self.bank_output_dir)
             self.log(f"  ✓ 合并完成：{len(merged)} 个合并文件")
             if merge_warnings:
                 self.log(f"  ⚠ 金额警告（分以下数值已舍去）：")
@@ -4069,7 +4064,7 @@ class BatchPrintGUI:
         # 生成操作记录
         try:
             report_path = generate_report_xlsx(
-                self.output_dir, renamed, matched,
+                self.bank_output_dir, renamed, matched,
                 unmatched, duplicates, merge_warnings, success, fail, fail_list,
                 no_signed=no_signed
             )
@@ -4094,7 +4089,7 @@ class BatchPrintGUI:
         # 步骤 1：改名
         self.log("【步骤1】改名银行报盘文件...")
         try:
-            renamed = rename_bank_files(self.bank_dir, self.output_dir)
+            renamed = rename_bank_files(self.bank_dir, self.bank_output_dir)
             self.log(f"  ✓ 改名完成：{len(renamed)} 个文件")
         except Exception as e:
             self.log(f"  ✗ 改名失败：{e}")
@@ -4104,7 +4099,7 @@ class BatchPrintGUI:
         # 步骤 2：合并
         self.log("【步骤2】合并银行报盘文件...")
         try:
-            merged, merge_warnings = merge_bank_files(renamed, self.bank_dir, self.output_dir)
+            merged, merge_warnings = merge_bank_files(renamed, self.bank_dir, self.bank_output_dir)
             self.log(f"  ✓ 合并完成：{len(merged)} 个合并文件")
             if merge_warnings:
                 self.log(f"  ⚠ 金额警告（分以下数值已舍去）：")
@@ -4151,7 +4146,7 @@ class BatchPrintGUI:
         # 生成操作记录
         try:
             report_path = generate_report_xlsx(
-                self.output_dir, renamed, matched, unmatched, duplicates, merge_warnings,
+                self.bank_output_dir, renamed, matched, unmatched, duplicates, merge_warnings,
                 no_signed=no_signed
             )
             self.log(f"  📄 操作记录已保存：{report_path}")
@@ -4199,7 +4194,7 @@ class BatchPrintGUI:
 
         try:
             payroll_path, bank_path, validation_results, op_log_path = merge_payrolls_by_tax(
-                self.payroll_dir, self.output_dir, self.bank_dir,
+                self.payroll_dir, self.payroll_output_dir, self.bank_dir,
                 selected_title=selected_title
             )
         except Exception as e:
@@ -4209,7 +4204,7 @@ class BatchPrintGUI:
             self._set_busy(False)
             return
 
-        self.log(f"  📁 输出目录：{self.output_dir}")
+        self.log(f"  📁 输出目录：{self.payroll_output_dir}")
         if payroll_path:
             self.log(f"  ✓ 工资表：{os.path.basename(payroll_path)}")
         if bank_path:
@@ -4272,7 +4267,7 @@ class BatchPrintGUI:
 
         try:
             payroll_path, bank_path, validation_results, op_log_path = merge_payrolls_by_tax(
-                self.payroll_dir, self.output_dir, self.bank_dir,
+                self.payroll_dir, self.payroll_output_dir, self.bank_dir,
                 selected_title=selected_title
             )
         except Exception as e:
@@ -4282,7 +4277,7 @@ class BatchPrintGUI:
             self._set_busy(False)
             return
 
-        self.log(f"  📁 输出目录：{self.output_dir}")
+        self.log(f"  📁 输出目录：{self.payroll_output_dir}")
         if payroll_path:
             self.log(f"  ✓ 工资表：{os.path.basename(payroll_path)}")
         if bank_path:
@@ -4304,9 +4299,6 @@ class BatchPrintGUI:
         if not self.bank_dir:
             messagebox.showwarning("提示", "请先选择银行报盘目录")
             return
-        if not self.output_dir:
-            messagebox.showwarning("提示", "请先选择输出目录")
-            return
 
         self._set_busy(True)
         self.log("=" * 50)
@@ -4314,7 +4306,7 @@ class BatchPrintGUI:
         self.log("")
 
         try:
-            out_path, total = convert_bank_format(self.bank_dir, self.output_dir)
+            out_path, total = convert_bank_format(self.bank_dir, self.bank_output_dir)
         except Exception as e:
             if str(e) == "用户已取消合并":
                 self.log("  ⚠ 用户取消合并")
@@ -4326,7 +4318,7 @@ class BatchPrintGUI:
             return
 
         if out_path:
-            self.log(f"  📁 输出目录：{self.output_dir}")
+        self.log(f"  📁 输出目录：{payroll_output_dir}")
             self.log(f"  ✓ 合并报盘：{os.path.basename(out_path)}（共 {total} 条）")
         else:
             self.log("  ⚠ 未找到可转换的报盘文件")
@@ -4342,9 +4334,6 @@ class BatchPrintGUI:
         if not self.bank_dir:
             messagebox.showwarning("提示", "请先选择银行报盘目录")
             return
-        if not self.output_dir:
-            messagebox.showwarning("提示", "请先选择输出目录")
-            return
 
         dlg = MergeOptionsDialog(self.root)
         if dlg.cancelled:
@@ -4354,13 +4343,13 @@ class BatchPrintGUI:
         self._set_busy(True)
 
         # 每次点击重新生成输出目录，避免重复生成到同一文件夹
-        self._set_default_output_dir()
+        self._set_default_bank_output_dir()
 
         self.log("=" * 50)
         self.log("开始高级合并报盘...")
         self.log("")
         self.log(f"  银行报盘目录：{self.bank_dir}")
-        self.log(f"  输出目录：{self.output_dir}")
+        self.log(f"  输出目录：{self.bank_output_dir}")
         self.log(f"  合并选项：")
         self.log(f"    - 同单位不同银行合并：{'✓' if opts['merge_banks'] else '✗'}")
         self.log(f"    - 同单位不同月份合并：{'✓' if opts['merge_months'] else '✗'}")
@@ -4388,7 +4377,7 @@ class BatchPrintGUI:
 
         try:
             output_files, warnings, stats = merge_bank_files_advanced(
-                self.bank_dir, self.output_dir,
+                self.bank_dir, self.bank_output_dir,
                 merge_different_banks=opts["merge_banks"],
                 merge_different_months=opts["merge_months"],
                 merge_by_big_org=opts["merge_big_org"],
@@ -4408,7 +4397,7 @@ class BatchPrintGUI:
             return
 
         self.log("")
-        self.log(f"  📁 输出目录：{self.output_dir}")
+        self.log(f"  📁 输出目录：{self.bank_output_dir}")
         self.log(f"  ✓ 生成 {len(output_files)} 个合并文件：")
         for fpath in sorted(output_files):
             self.log(f"    {os.path.basename(fpath)}")
@@ -4444,18 +4433,15 @@ class BatchPrintGUI:
         if not self.payroll_dir:
             messagebox.showwarning("提示", "请先选择工资表目录")
             return
-        if not self.output_dir:
-            messagebox.showwarning("提示", "请先选择输出目录")
-            return
 
         self._set_busy(True)
-        self._set_default_output_dir()
+        self._set_default_payroll_output_dir()
 
         self.log("=" * 50)
         self.log("开始合并工资表（简单堆叠）...")
         self.log("")
         self.log(f"  工资表目录：{self.payroll_dir}")
-        self.log(f"  输出目录：{self.output_dir}")
+        self.log(f"  输出目录：{self.payroll_output_dir}")
 
         def progress_cb(current, total, message):
             self.log(f"  [{current}/{total}] {message}")
@@ -4463,7 +4449,7 @@ class BatchPrintGUI:
 
         try:
             output_files, warnings, stats = merge_payrolls_simple(
-                self.payroll_dir, self.output_dir,
+                self.payroll_dir, self.payroll_output_dir,
                 progress_callback=progress_cb,
             )
         except Exception as e:
@@ -4474,7 +4460,7 @@ class BatchPrintGUI:
             return
 
         self.log("")
-        self.log(f"  📁 输出目录：{self.output_dir}")
+        self.log(f"  📁 输出目录：{self.payroll_output_dir}")
         if output_files:
             self.log(f"  ✓ 生成 {len(output_files)} 个合并工资表文件：")
             for fpath in sorted(output_files):
@@ -4506,15 +4492,11 @@ class BatchPrintGUI:
     # ── 目录检查 ──────────────────────────────
 
     def _check_dirs(self):
-        """检查三个目录是否都已选择"""
         if not self.bank_dir:
             messagebox.showwarning("提示", "请先选择银行报盘目录")
             return False
         if not self.payroll_dir:
             messagebox.showwarning("提示", "请先选择工资表目录")
-            return False
-        if not self.output_dir:
-            messagebox.showwarning("提示", "请先选择输出目录")
             return False
         return True
 
