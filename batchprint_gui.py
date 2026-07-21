@@ -548,20 +548,24 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = -4152
             r += 2
 
-            # ── 读取第1个源文件的3行复合表头（行3-5） ──
-            hdr_rows = [{}, {}, {}]  # [row3, row4, row5]  each {col_index: value}
+            # ── 读取第1个源文件的2行复合表头（行3-4）及合并单元格 ──
+            hdr_rows = [{}, {}]
+            src_merges = []  # list of (min_row, max_row, min_col, max_col)
             if items:
                 try:
                     hdr_wb = openpyxl.load_workbook(items[0]["path"])
                     hdr_ws = hdr_wb.active
-                    for hi, hr in enumerate([3, 4, 5]):
+                    for hi, hr in enumerate([3, 4]):
                         for c in range(1, max_cols + 1):
                             v = hdr_ws.cell(row=hr, column=c).value
                             hdr_rows[hi][c] = str(v).strip() if v is not None else ""
+                    for mc in hdr_ws.merged_cells.ranges:
+                        if mc.min_row >= 3 and mc.max_row <= 5:
+                            src_merges.append((mc.min_row, mc.max_row, mc.min_col, mc.max_col))
                     hdr_wb.close()
                 except Exception:
                     pass
-            # 对第1行表头（row3）：向右传播合并单元格的值（如"扣款明细"跨多列）
+            # 对 row3：向右传播合并单元格的值
             last_val = ""
             for c in range(1, max_cols + 1):
                 v = hdr_rows[0].get(c, "")
@@ -569,39 +573,47 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                     last_val = v
                 hdr_rows[0][c] = last_val
 
-            # ── 写入3行复合表头 ──
-            for hi in range(3):  # hi=0 → row3, 1→row4, 2→row5
-                merge_start = None
-                merge_val = None
-                # 列1：序号（row3），row4/5 空
+            # ── 写入2行复合表头 ──
+            hdr_start_row = r
+            col_map = {}
+            for vi, oc in enumerate(active_cols, 3):
+                col_map[oc] = vi
+            for hi in range(2):
                 val1 = "序号" if hi == 0 else ""
                 tgt_ws.Cells(r, 1).Value = val1
                 if hi == 0:
                     tgt_ws.Cells(r, 1).Font.Bold = True
-                # 列2：结算单元名称（替换 row3 的"姓名"），row4/5 空
                 val2 = "结算单元名称" if hi == 0 else ""
                 tgt_ws.Cells(r, 2).Value = val2
                 if hi == 0:
                     tgt_ws.Cells(r, 2).Font.Bold = True
-                # 数据列3+
                 for vi, orig_c in enumerate(active_cols, 3):
                     val = hdr_rows[hi].get(orig_c, "")
                     tgt_ws.Cells(r, vi).Value = val
                     if hi == 0:
                         tgt_ws.Cells(r, vi).Font.Bold = True
-                    # 合并同一行中连续相同的非空值
-                    if val and val == merge_val:
-                        pass
-                    else:
-                        if merge_start is not None and vi - 1 > merge_start:
-                            tgt_ws.Range(tgt_ws.Cells(r, merge_start),
-                                         tgt_ws.Cells(r, vi - 1)).Merge()
-                        merge_start = vi if val else None
-                        merge_val = val
-                if merge_start is not None and virtual_cols > merge_start:
-                    tgt_ws.Range(tgt_ws.Cells(r, merge_start),
-                                 tgt_ws.Cells(r, virtual_cols)).Merge()
                 r += 1
+            hdr_end_row = r - 1
+
+            # 垂直合并：对第2行为空的列，跨行合并
+            for vi in range(1, virtual_cols + 1):
+                val2 = tgt_ws.Cells(hdr_start_row + 1, vi).Value
+                if not val2:
+                    tgt_ws.Range(tgt_ws.Cells(hdr_start_row, vi),
+                                 tgt_ws.Cells(hdr_end_row, vi)).Merge()
+            # 水平合并：映射源表 row4 merge 到虚拟表（row3 水平合并已通过传播值处理）
+            for mc_min_row, mc_max_row, mc_min_col, mc_max_col in src_merges:
+                if mc_min_row == 3 and mc_max_row == 3:
+                    continue
+                vc1 = col_map.get(mc_min_col)
+                vc2 = col_map.get(mc_max_col)
+                if vc1 is None or vc2 is None:
+                    continue
+                vr1 = hdr_start_row + (mc_min_row - 3)
+                vr2 = hdr_start_row + (mc_max_row - 3)
+                if vc1 < vc2 or vr1 < vr2:
+                    tgt_ws.Range(tgt_ws.Cells(vr1, vc1),
+                                 tgt_ws.Cells(vr2, vc2)).Merge()
             # 记录数据区域起始行
             data_start_row = r
 
