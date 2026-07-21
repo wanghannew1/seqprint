@@ -538,6 +538,41 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                 bank_counts[bank] += len(rows)
                 yearmons_in_sub.add(yearmon)
 
+            # 文件级去重：同一子组内内容完全相同的文件只保留一份
+            file_sigs = defaultdict(list)
+            for rec in all_operation_records[records_before:]:
+                if rec.get("filtered_reason"):
+                    continue
+                p = str(rec.get("id_number", "")).strip()
+                a = str(rec.get("name", "")).strip()
+                if not p and not a:
+                    continue
+                file_sigs[rec["source_file"]].append((p or "", a or "", float(rec["amount"])))
+            skip_files_set = set()
+            fp_cache = {}
+            for fname in sorted(file_sigs):
+                fp = frozenset(file_sigs[fname])
+                if not fp:
+                    continue
+                if fp in fp_cache:
+                    skip_files_set.add(fname)
+                    warnings_list.append(f"文件重复已去重：{fname} 与 {fp_cache[fp]} 内容完全相同，已跳过")
+                else:
+                    fp_cache[fp] = fname
+            if skip_files_set:
+                keep_flags = []
+                row_pos = 0
+                for rec in all_operation_records[records_before:]:
+                    if rec.get("filtered_reason"):
+                        continue
+                    if rec["source_file"] in skip_files_set:
+                        rec["filtered_reason"] = "文件重复，已去重"
+                        keep_flags.append(False)
+                    else:
+                        keep_flags.append(True)
+                    row_pos += 1
+                all_rows[:] = [r for r, keep in zip(all_rows, keep_flags) if keep]
+
             # 同单位同月份同人同样金额重复检测
             dup_groups = defaultdict(list)
             for rec in all_operation_records[records_before:]:
