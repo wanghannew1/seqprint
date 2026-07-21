@@ -415,6 +415,9 @@ def merge_bank_files_advanced(bank_dir, output_dir,
         except ValueError:
             skip_files.append(fname)
 
+    if skip_files:
+        warnings_list.append(f"以下 {len(skip_files)} 个文件文件名不符合格式，已跳过：{', '.join(skip_files[:5])}")
+
     if not file_records:
         return [], ["所有文件均无法解析文件名"], {}
 
@@ -779,9 +782,6 @@ def merge_bank_files_advanced(bank_dir, output_dir,
 
     stats["output_count"] = len(output_files)
     stats["big_orgs"] = sorted(stats["big_orgs"])
-
-    if skip_files:
-        warnings_list.append(f"以下 {len(skip_files)} 个文件文件名不符合格式，已跳过：{', '.join(skip_files[:5])}")
 
     # 全局重复报盘检测（跨文件/跨子组，按大单位归类）
     if all_operation_records:
@@ -3564,6 +3564,8 @@ class BatchPrintGUI:
             state=tk.DISABLED,
         )
         self.log_area.pack(fill=tk.BOTH, expand=True)
+        self.log_area.tag_configure("warning", foreground="#cc3300", font=("Consolas", 10, "bold"))
+        self.log_area.tag_configure("success", foreground="#007700")
 
     # ── 日志 ──────────────────────────────
 
@@ -3571,6 +3573,22 @@ class BatchPrintGUI:
         """向日志区域追加一行"""
         self.log_area.config(state=tk.NORMAL)
         self.log_area.insert(tk.END, message + "\n")
+        self.log_area.see(tk.END)
+        self.log_area.config(state=tk.DISABLED)
+        self.root.update_idletasks()
+
+    def log_warning(self, message):
+        """以醒目颜色追加警告信息"""
+        self.log_area.config(state=tk.NORMAL)
+        self.log_area.insert(tk.END, message + "\n", "warning")
+        self.log_area.see(tk.END)
+        self.log_area.config(state=tk.DISABLED)
+        self.root.update_idletasks()
+
+    def log_success(self, message):
+        """以绿色追加成功信息"""
+        self.log_area.config(state=tk.NORMAL)
+        self.log_area.insert(tk.END, message + "\n", "success")
         self.log_area.see(tk.END)
         self.log_area.config(state=tk.DISABLED)
         self.root.update_idletasks()
@@ -4070,9 +4088,9 @@ class BatchPrintGUI:
             self.log(f"    {os.path.basename(fpath)}")
 
         if warnings:
-            self.log(f"  ⚠ 警告 ({len(warnings)} 条)：")
+            self.log_warning(f"  ⚠ 警告 ({len(warnings)} 条)：")
             for w in warnings:
-                self.log(f"    - {w}")
+                self.log_warning(f"    - {w}")
             skip_warnings = [w for w in warnings if "文件名不符合格式" in w]
             if skip_warnings:
                 msg = "以下文件文件名不符合格式（缺少年月或银行），已跳过不处理：\n\n"
