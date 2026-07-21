@@ -515,7 +515,7 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).HorizontalAlignment = 1   # xlLeft
             # 在最右列之上写入填报时间（右对齐）
             time_col = max_cols if max_cols <= 3 else 4
-            tgt_ws.Cells(r, time_col).Value = f"填报时间：{datetime.now().strftime('%Y年%m月%d日 %H:%M')}"
+            tgt_ws.Cells(r, time_col).Value = f"填报时间：{datetime.now().strftime('%Y年%m月%d日')}"
             tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, max_cols)).Merge()
             tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, max_cols)).HorizontalAlignment = -4152  # xlRight
             r += 2  # 空一行
@@ -608,9 +608,9 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             # ── 页面设置 ──
             tgt_ws.PageSetup.Orientation = 2          # xlLandscape
             tgt_ws.PageSetup.PaperSize = 9            # xlPaperA4
-            tgt_ws.PageSetup.FitToPagesWide = 1       # 列缩放到一页宽
-            tgt_ws.PageSetup.FitToPagesTall = 0       # 行不限制页数
-            tgt_ws.PageSetup.Zoom = False             # 禁用缩放，启用 FitToPages
+            tgt_ws.PageSetup.Zoom = False
+            tgt_ws.PageSetup.FitToPagesWide = 1
+            tgt_ws.PageSetup.FitToPagesTall = 9999
 
             # ── 保存 ──
             ym_part = f"_{ym_display}" if ym_display else ""
