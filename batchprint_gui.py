@@ -659,32 +659,6 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                         keep_flags.append(True)
                 all_rows[:] = [r for r, keep in zip(all_rows, keep_flags) if keep]
 
-            # 同单位同月份同人同样金额重复检测（行级）
-            dup_groups = defaultdict(list)
-            for rec in all_operation_records[records_before:]:
-                if rec.get("filtered_reason"):
-                    continue
-                person = str(rec.get("id_number", "")).strip()
-                account = str(rec.get("name", "")).strip()
-                if not person and not account:
-                    continue
-                key = (rec["source_yearmon"], rec["big_org"],
-                       person or "", account or "", float(rec["amount"]))
-                dup_groups[key].append(rec)
-            dup_warnings = {k: v for k, v in dup_groups.items() if len(v) > 1}
-            if dup_warnings:
-                for (ym, big_org, person, account, amount), recs in dup_warnings.items():
-                    for r in recs:
-                        r["dup_warning"] = True
-                    source_files = sorted(set(r["source_file"] for r in recs))
-                    acct_display = f" 账号{account}" if account else ""
-                    _warn(
-                        f"可能重复报盘：{big_org} 月份{ym} "
-                        f"户名「{person}」{acct_display}金额{float(amount):.2f}元 "
-                        f"在{len(recs)}条记录中出现"
-                        f"（来源：{'、'.join(source_files)}），详见操作记录末尾"
-                    )
-
             if not all_rows:
                 continue
 
