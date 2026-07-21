@@ -477,10 +477,10 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                 info["ncols"] = src_ws_check.max_column or 1
                 info["nrows"] = src_ws_check.max_row or 1
                 max_cols = max(max_cols, info["ncols"])
-                # 读取列头
+                # 读取列头（第2行；第1行为标题行）
                 row1_vals = []
                 for c in range(1, info["ncols"] + 1):
-                    v = src_ws_check.cell(row=1, column=c).value
+                    v = src_ws_check.cell(row=2, column=c).value
                     s = str(v).strip() if v is not None else ""
                     row1_vals.append(s)
                 info["headers"] = row1_vals
