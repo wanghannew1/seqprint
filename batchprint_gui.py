@@ -548,9 +548,8 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = -4152
             r += 2
 
-            # ── 读取第1个源文件的2行复合表头（行3-4）及合并单元格 ──
+            # ── 读取第1个源文件的2行复合表头（行3-4） ──
             hdr_rows = [{}, {}]
-            src_merges = []  # list of (min_row, max_row, min_col, max_col)
             if items:
                 try:
                     hdr_wb = openpyxl.load_workbook(items[0]["path"])
@@ -559,13 +558,10 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                         for c in range(1, max_cols + 1):
                             v = hdr_ws.cell(row=hr, column=c).value
                             hdr_rows[hi][c] = str(v).strip() if v is not None else ""
-                    for mc in hdr_ws.merged_cells.ranges:
-                        if mc.min_row >= 3 and mc.max_row <= 5:
-                            src_merges.append((mc.min_row, mc.max_row, mc.min_col, mc.max_col))
                     hdr_wb.close()
                 except Exception:
                     pass
-            # 对 row3：向右传播合并单元格的值
+            # 对 row3：向右传播合并单元格的值（如"扣款明细"跨多列）
             last_val = ""
             for c in range(1, max_cols + 1):
                 v = hdr_rows[0].get(c, "")
@@ -595,25 +591,29 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                 r += 1
             hdr_end_row = r - 1
 
-            # 垂直合并：对第2行为空的列，跨行合并
+            # 第2行（row4 source→ virtual row5）水平合并：养老/失业/医疗/公积金 各跨2列
+            row4_h_merges = [(17, 18), (19, 20), (21, 22), (24, 25)]
+            for c1, c2 in row4_h_merges:
+                vc1 = col_map.get(c1)
+                vc2 = col_map.get(c2)
+                if vc1 is not None and vc2 is not None and vc1 < vc2:
+                    tgt_ws.Range(tgt_ws.Cells(hdr_start_row + 1, vc1),
+                                 tgt_ws.Cells(hdr_start_row + 1, vc2)).Merge()
+            # 收集已水平合并的列（跳过垂直合并）
+            hmerged = set()
+            for c1, c2 in row4_h_merges:
+                vc1 = col_map.get(c1)
+                vc2 = col_map.get(c2)
+                if vc1 is not None and vc2 is not None:
+                    hmerged.update(range(vc1, vc2 + 1))
+            # 垂直合并：对第2行为空的列跨行合并（跳过已水平合并的）
             for vi in range(1, virtual_cols + 1):
+                if vi in hmerged:
+                    continue
                 val2 = tgt_ws.Cells(hdr_start_row + 1, vi).Value
                 if not val2:
                     tgt_ws.Range(tgt_ws.Cells(hdr_start_row, vi),
                                  tgt_ws.Cells(hdr_end_row, vi)).Merge()
-            # 水平合并：映射源表 row4 merge 到虚拟表（row3 水平合并已通过传播值处理）
-            for mc_min_row, mc_max_row, mc_min_col, mc_max_col in src_merges:
-                if mc_min_row == 3 and mc_max_row == 3:
-                    continue
-                vc1 = col_map.get(mc_min_col)
-                vc2 = col_map.get(mc_max_col)
-                if vc1 is None or vc2 is None:
-                    continue
-                vr1 = hdr_start_row + (mc_min_row - 3)
-                vr2 = hdr_start_row + (mc_max_row - 3)
-                if vc1 < vc2 or vr1 < vr2:
-                    tgt_ws.Range(tgt_ws.Cells(vr1, vc1),
-                                 tgt_ws.Cells(vr2, vc2)).Merge()
             # 记录数据区域起始行
             data_start_row = r
 
