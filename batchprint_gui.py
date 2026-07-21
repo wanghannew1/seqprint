@@ -418,6 +418,10 @@ def merge_bank_files_advanced(bank_dir, output_dir,
         warnings_list.append(msg)
         if warning_callback:
             warning_callback(msg)
+        if "可能重复报盘" in msg:
+            dup_warning_msgs.append(msg)
+
+    dup_warning_msgs = []  # 收集重复报盘警告，最后统一弹窗
 
     for fname in sorted(bank_files):
         try:
@@ -892,6 +896,13 @@ def merge_bank_files_advanced(bank_dir, output_dir,
         op_record_path = _generate_operation_record(output_dir, all_operation_records, stats, output_files, file_dedup_log, skip_files_list)
         if op_record_path:
             _warn(f"操作记录已生成: {os.path.basename(op_record_path)}")
+
+    if dup_warning_msgs:
+        msg = f"发现 {len(dup_warning_msgs)} 条可能重复报盘记录（重复行已排列在操作记录末尾）:\n\n"
+        msg += "\n".join(f"• {w}" for w in dup_warning_msgs[:5])
+        if len(dup_warning_msgs) > 5:
+            msg += f"\n... 及另外 {len(dup_warning_msgs) - 5} 条"
+        messagebox.showwarning("重复报盘警告", msg)
 
     if progress_callback:
         progress_callback(total_groups, total_groups, f"完成！生成 {len(output_files)} 个合并文件")
@@ -4161,13 +4172,6 @@ class BatchPrintGUI:
             self.log_warning(f"  ⚠ 警告 ({len(warnings)} 条)：")
             for w in warnings:
                 self.log_warning(f"    - {w}")
-            dup_warnings = [w for w in warnings if "可能重复报盘" in w]
-            if dup_warnings:
-                msg = f"发现 {len(dup_warnings)} 条可能重复报盘记录（重复行已排列在操作记录末尾）:\n\n"
-                msg += "\n".join(f"• {w}" for w in dup_warnings[:5])
-                if len(dup_warnings) > 5:
-                    msg += f"\n... 及另外 {len(dup_warnings) - 5} 条"
-                messagebox.showwarning("重复报盘警告", msg)
 
         self.log("")
         self.log("  📊 统计信息：")
