@@ -1059,6 +1059,19 @@ def _generate_operation_record(output_dir, records, stats, output_files, file_de
         ws3.auto_filter.ref = f"A1:E{len(file_dedup_log) + 1}"
         ws3.freeze_panes = "A2"
 
+    # 重新排列 sheet 顺序
+    sheet_order = ["汇总", "输出文件清单", "合并映射明细"]
+    if skip_files_list:
+        sheet_order.append("跳过文件")
+    if file_dedup_log:
+        sheet_order.append("文件去重记录")
+    # 从后往前移动，避免索引偏移
+    for target_idx in range(len(sheet_order) - 1, -1, -1):
+        name = sheet_order[target_idx]
+        current_idx = wb.sheetnames.index(name)
+        if current_idx != target_idx:
+            wb.move_sheet(name, offset=target_idx - current_idx)
+
     wb.save(out_path)
     return out_path
 
