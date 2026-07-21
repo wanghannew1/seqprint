@@ -323,6 +323,23 @@ def is_excluded(unit_name):
     return False
 
 
+def _normalize_unit_name(name):
+    """去除 Windows 复制文件时添加的后缀（1）（2）- 副本 - Copy 等"""
+    import re
+    s = str(name).strip()
+    # 按优先级依次去除各模式
+    patterns = [
+        r'\s*[（(]\d+[）)]\s*$',           # （1） (2)
+        r'\s*[-–—]\s*副本\s*$',             # - 副本  — 副本
+        r'\s*[-–—]\s*[Cc]opy\s*$',          # - Copy  - copy
+        r'\s*[-–—]\s*复件\s*$',             # - 复件
+        r'\s*_副本\s*$',                    # _副本
+    ]
+    for p in patterns:
+        s = re.sub(p, '', s)
+    return s.strip()
+
+
 def get_big_org(unit_name):
     rules = _load_mapping_rules()
     for match_type, pattern, big_org, excluded in rules:
@@ -339,7 +356,9 @@ def get_big_org(unit_name):
         if big_org:
             return big_org, unit_name
         return unit_name, unit_name
-    return unit_name, unit_name
+    # 无匹配规则时，用去后缀后的规范化名作为大单位名
+    norm = _normalize_unit_name(unit_name)
+    return norm, unit_name
 
 
 def merge_bank_files_advanced(bank_dir, output_dir,
@@ -686,6 +705,52 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                     f"户名「{person}」{acct_display}金额{float(amount):.2f}元 "
                     f"在{len(recs)}条记录中出现"
                     f"（来源：{'、'.join(source_files)}），详见操作记录末尾"
+                )
+
+    # 文件级重复检测：源文件中所有有效记录全部被判重 → 几乎确定是文件复制
+    if all_operation_records:
+        file_recs = defaultdict(list)
+        for rec in all_operation_records:
+            if rec.get("filtered_reason"):
+                continue
+            file_recs[rec["source_file"]].append(rec)
+        dup_files = []
+        for fname, recs in sorted(file_recs.items()):
+            total = len(recs)
+            if total == 0:
+                continue
+            dup_count = sum(1 for r in recs if r.get("dup_warning"))
+            if dup_count == total and total >= 2:
+                dup_files.append(fname)
+        if len(dup_files) >= 2:
+            # 找出哪些重复文件之间内容完全相同
+            file_key_sets = {}
+            for fname in dup_files:
+                keys = set()
+                for r in file_recs[fname]:
+                    person = str(r.get("id_number", "")).strip()
+                    account = str(r.get("name", "")).strip()
+                    k = (r["source_yearmon"], r["big_org"],
+                         person or "", account or "", float(r["amount"]))
+                    keys.add(k)
+                file_key_sets[fname] = keys
+            seen_groups = []
+            used = set()
+            for fname in dup_files:
+                if fname in used:
+                    continue
+                group = [fname]
+                used.add(fname)
+                for other in dup_files:
+                    if other not in used and file_key_sets[fname] == file_key_sets[other]:
+                        group.append(other)
+                        used.add(other)
+                if len(group) >= 2:
+                    seen_groups.append(group)
+            for group in seen_groups:
+                warnings_list.append(
+                    f"文件级重复（可能为文件复制）：以下 {len(group)} 个文件内容完全相同 "
+                    f"（{'、'.join(group)}），请确认是否重复报盘"
                 )
 
     # 操作记录排序：重复行相邻排列
