@@ -4142,9 +4142,12 @@ class BatchPrintGUI:
                 warning_callback=lambda msg: self.log_warning(f"  ⚠ {msg}"),
             )
         except Exception as e:
-            self.log(f"  ✗ 合并失败：{e}")
-            import traceback
-            self.log(traceback.format_exc())
+            if str(e) == "用户已取消合并":
+                self.log("  ⚠ 用户取消合并")
+            else:
+                self.log(f"  ✗ 合并失败：{e}")
+                import traceback
+                self.log(traceback.format_exc())
             self._set_busy(False)
             return
 
