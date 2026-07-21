@@ -520,9 +520,11 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, max_cols)).HorizontalAlignment = -4152  # xlRight
             r += 2  # 空一行
 
-            # 列头行：使用实际列名
-            # 取并集的前 max_cols 个
-            virtual_headers = all_header_names[:max_cols]
+            # 列头行：序号 | 结算单元名称 | 实际数据列头
+            virtual_headers = ["序号", "结算单元名称"]
+            # 从第3列开始取实际列名（跳过序号/姓名等前2列）
+            data_headers = all_header_names[2:max_cols]
+            virtual_headers += data_headers
             if len(virtual_headers) < max_cols:
                 virtual_headers += [""] * (max_cols - len(virtual_headers))
             for c, h in enumerate(virtual_headers, 1):
@@ -530,53 +532,57 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                 tgt_ws.Cells(r, c).Font.Bold = True
             r += 1
 
-            # 合计行：从每个源表的合计行读取数据
-            total_values = {}
+            # ── 读取每个源文件的合计行，写出到汇总表 ──
+            file_totals = []  # 每个元素是 {col: value}
             for info in items:
+                row_vals = {}
                 try:
                     src_rb = openpyxl.load_workbook(info["path"], data_only=True)
                     src_ws_r = src_rb.active
-                    # 找合计行（从最后一行往前找）
                     src_nrows = src_ws_r.max_row or 1
                     for check_r in range(src_nrows, 0, -1):
                         v = src_ws_r.cell(row=check_r, column=1).value
                         if v and "合计" in str(v):
-                            total_row = check_r
-                            for c in range(1, min(info["ncols"], max_cols) + 1):
-                                cv = src_ws_r.cell(row=total_row, column=c).value
-                                try:
-                                    total_values[c] = total_values.get(c, 0) + float(cv)
-                                except (ValueError, TypeError):
-                                    if cv is not None and "合计" not in str(cv):
-                                        total_values[c] = cv  # 非数字直接覆盖
+                            for c in range(1, max_cols + 1):
+                                cv = src_ws_r.cell(row=check_r, column=c).value
+                                row_vals[c] = cv
                             break
                     src_rb.close()
                 except Exception:
                     pass
+                file_totals.append(row_vals)
 
+            # 每个源文件一行
+            total_accum = {}
+            for idx, (info, ft) in enumerate(zip(items, file_totals), 1):
+                tgt_ws.Cells(r, 1).Value = idx
+                tgt_ws.Cells(r, 2).Value = info["unit_name"]
+                for c in range(3, max_cols + 1):
+                    cv = ft.get(c)
+                    if cv is not None:
+                        try:
+                            val = float(cv)
+                            tgt_ws.Cells(r, c).Value = round(val, 2)
+                            tgt_ws.Cells(r, c).NumberFormat = "0.00"
+                            total_accum[c] = total_accum.get(c, 0) + val
+                        except (ValueError, TypeError):
+                            tgt_ws.Cells(r, c).Value = cv
+                r += 1
+
+            # 合计行
             tgt_ws.Cells(r, 1).Value = "合计"
             tgt_ws.Cells(r, 1).Font.Bold = True
             for c in range(2, max_cols + 1):
-                if c in total_values:
-                    v = total_values[c]
-                    if isinstance(v, float):
-                        tgt_ws.Cells(r, c).Value = round(v, 2)
-                        tgt_ws.Cells(r, c).NumberFormat = "0.00"
-                    else:
-                        tgt_ws.Cells(r, c).Value = v
+                if c in total_accum:
+                    tgt_ws.Cells(r, c).Value = round(total_accum[c], 2)
+                    tgt_ws.Cells(r, c).NumberFormat = "0.00"
                 tgt_ws.Cells(r, c).Font.Bold = True
             # 合计行加底色
             tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).Interior.Color = 0xE8F0FE
-            r += 1
-
-            # 填报信息行
-            from datetime import datetime
-            tgt_ws.Cells(r, 1).Value = "制表人："
-            tgt_ws.Cells(r, 4).Value = f"填报时间：{datetime.now().strftime('%Y年%m月%d日 %H:%M')}"
-            row_after_virtual = r + 2  # 虚拟表结束，空一行后开始复制源表
+            r += 2  # 空行后开始粘贴源表
 
             # ── 复制源工资表 ──
-            current_row = row_after_virtual
+            current_row = r
             for info in items:
                 try:
                     src_wb = app.Workbooks.Open(info["path"])
