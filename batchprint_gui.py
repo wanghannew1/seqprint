@@ -467,14 +467,27 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             all_yearmons = set(info["yearmon"] for info in items)
             ym_display = _format_yearmons(all_yearmons)
 
-            # 扫描每个源文件的最大列数（用于虚拟表）
+            # 扫描每个源文件的列数和列头（第一行）
             max_cols = 0
+            all_header_names = []       # 有序并集
+            seen_headers = set()
             for info in items:
                 src_wb_check = openpyxl.load_workbook(info["path"])
                 src_ws_check = src_wb_check.active
                 info["ncols"] = src_ws_check.max_column or 1
                 info["nrows"] = src_ws_check.max_row or 1
                 max_cols = max(max_cols, info["ncols"])
+                # 读取列头
+                row1_vals = []
+                for c in range(1, info["ncols"] + 1):
+                    v = src_ws_check.cell(row=1, column=c).value
+                    s = str(v).strip() if v is not None else ""
+                    row1_vals.append(s)
+                info["headers"] = row1_vals
+                for h in row1_vals:
+                    if h and h not in seen_headers:
+                        all_header_names.append(h)
+                        seen_headers.add(h)
                 src_wb_check.close()
 
             # ── 创建目标 workbook ──
@@ -484,6 +497,7 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
 
             # ── 写入虚拟表头 ──
             r = 1
+            # 第1行：大标题 居中合并
             title = f"{group_key} 工资表合集"
             if ym_display:
                 title += f"（{ym_display}）"
@@ -492,12 +506,26 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).Font.Bold = True
             tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).Font.Size = 16
             tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).HorizontalAlignment = -4108
-            r += 2  # 标题行 + 空行
+            r += 1
 
-            # 列头行
-            col_headers = ["序号", "姓名"] + [f"列{i}" for i in range(3, max_cols + 1)]
-            col_headers = col_headers[:max_cols]
-            for c, h in enumerate(col_headers, 1):
+            # 第2行：单位名称（左） + 填报时间（右）
+            from datetime import datetime
+            tgt_ws.Cells(r, 1).Value = f"单位名称：{group_key}"
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).Merge()
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).HorizontalAlignment = 1   # xlLeft
+            # 在最右列之上写入填报时间（右对齐）
+            time_col = max_cols if max_cols <= 3 else 4
+            tgt_ws.Cells(r, time_col).Value = f"填报时间：{datetime.now().strftime('%Y年%m月%d日 %H:%M')}"
+            tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, max_cols)).Merge()
+            tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, max_cols)).HorizontalAlignment = -4152  # xlRight
+            r += 2  # 空一行
+
+            # 列头行：使用实际列名
+            # 取并集的前 max_cols 个
+            virtual_headers = all_header_names[:max_cols]
+            if len(virtual_headers) < max_cols:
+                virtual_headers += [""] * (max_cols - len(virtual_headers))
+            for c, h in enumerate(virtual_headers, 1):
                 tgt_ws.Cells(r, c).Value = h
                 tgt_ws.Cells(r, c).Font.Bold = True
             r += 1
@@ -567,7 +595,7 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                     app.CutCopyMode = False
                     src_wb.Close(SaveChanges=False)
 
-                    current_row += src_last_row + 1
+                    current_row += src_last_row + 3  # 表间空三行
                 except Exception as e:
                     warnings_list.append(f"复制失败: {info['fname']} - {e}")
 
