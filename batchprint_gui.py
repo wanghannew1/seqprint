@@ -492,7 +492,11 @@ def merge_bank_files_advanced(bank_dir, output_dir,
         sub_groups = {}
         for rec in recs:
             yearmon, bank = rec[0], rec[1]
-            if not merge_different_months and not merge_different_banks:
+            excluded = rec[5]  # 排除项标记
+            if excluded:
+                # 排除项：合并不同银行，不合并不同月份
+                sub_key = yearmon
+            elif not merge_different_months and not merge_different_banks:
                 sub_key = f"{yearmon}|{bank}"
             elif not merge_different_months:
                 sub_key = yearmon
