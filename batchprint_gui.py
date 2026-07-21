@@ -873,7 +873,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
         skip_files_list = stats.get("skip_files_list", [])
         op_record_path = _generate_operation_record(output_dir, all_operation_records, stats, output_files, file_dedup_log, skip_files_list)
         if op_record_path:
-            warnings_list.append(f"操作记录已生成: {os.path.basename(op_record_path)}")
+            stats["op_record_path"] = op_record_path
 
     if dup_warning_msgs:
         msg = f"发现 {len(dup_warning_msgs)} 条可能重复报盘记录（重复行已排列在操作记录末尾）:\n\n"
@@ -4154,6 +4154,10 @@ class BatchPrintGUI:
             self.log_warning(f"  ⚠ 警告 ({len(warnings)} 条)：")
             for w in warnings:
                 self.log_warning(f"    - {w}")
+
+        op_record_path = stats.get("op_record_path")
+        if op_record_path:
+            self.log(f"  📄 操作记录已保存：{os.path.basename(op_record_path)}")
 
         self.log("")
         self.log("  📊 统计信息：")
