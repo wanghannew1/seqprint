@@ -4441,8 +4441,8 @@ class BatchPrintGUI:
     # ── 合并工资表（简单堆叠） ──────────────────────────
 
     def run_merge_payrolls_simple(self):
-        if not self.bank_dir:
-            messagebox.showwarning("提示", "请先选择包含 signed_ 工资表的目录")
+        if not self.payroll_dir:
+            messagebox.showwarning("提示", "请先选择工资表目录")
             return
         if not self.output_dir:
             messagebox.showwarning("提示", "请先选择输出目录")
@@ -4454,7 +4454,7 @@ class BatchPrintGUI:
         self.log("=" * 50)
         self.log("开始合并工资表（简单堆叠）...")
         self.log("")
-        self.log(f"  工资表目录：{self.bank_dir}")
+        self.log(f"  工资表目录：{self.payroll_dir}")
         self.log(f"  输出目录：{self.output_dir}")
 
         def progress_cb(current, total, message):
@@ -4463,7 +4463,7 @@ class BatchPrintGUI:
 
         try:
             output_files, warnings, stats = merge_payrolls_simple(
-                self.bank_dir, self.output_dir,
+                self.payroll_dir, self.output_dir,
                 progress_callback=progress_cb,
             )
         except Exception as e:
