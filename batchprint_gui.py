@@ -477,17 +477,6 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                 info["ncols"] = src_ws_check.max_column or 1
                 info["nrows"] = src_ws_check.max_row or 1
                 max_cols = max(max_cols, info["ncols"])
-                # 读取列头（第3行；第1行为标题行，第2行为副标题/空行）
-                row1_vals = []
-                for c in range(1, info["ncols"] + 1):
-                    v = src_ws_check.cell(row=3, column=c).value
-                    s = str(v).strip() if v is not None else ""
-                    row1_vals.append(s)
-                info["headers"] = row1_vals
-                for h in row1_vals:
-                    if h and h not in seen_headers:
-                        all_header_names.append(h)
-                        seen_headers.add(h)
                 src_wb_check.close()
 
             # ── 创建目标 workbook ──
@@ -559,24 +548,62 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = -4152
             r += 2
 
-            # 列头行
-            header_map = {}  # col_index → header_name (from row 3)
-            for info in items:
-                for c in range(3, max_cols + 1):
-                    idx = c - 1
-                    if idx < len(info["headers"]):
-                        h = info["headers"][idx]
-                        if h and c not in header_map:
-                            header_map[c] = h
-            tgt_ws.Cells(r, 1).Value = "序号"
-            tgt_ws.Cells(r, 1).Font.Bold = True
-            tgt_ws.Cells(r, 2).Value = "结算单元名称"
-            tgt_ws.Cells(r, 2).Font.Bold = True
-            for vi, c in enumerate(active_cols, 3):
-                h = header_map.get(c, f"列{c}")
-                tgt_ws.Cells(r, vi).Value = h
-                tgt_ws.Cells(r, vi).Font.Bold = True
-            r += 1
+            # ── 读取第1个源文件的3行复合表头（行3-5） ──
+            hdr_rows = [{}, {}, {}]  # [row3, row4, row5]  each {col_index: value}
+            if items:
+                try:
+                    hdr_wb = openpyxl.load_workbook(items[0]["path"])
+                    hdr_ws = hdr_wb.active
+                    for hi, hr in enumerate([3, 4, 5]):
+                        for c in range(1, max_cols + 1):
+                            v = hdr_ws.cell(row=hr, column=c).value
+                            hdr_rows[hi][c] = str(v).strip() if v is not None else ""
+                    hdr_wb.close()
+                except Exception:
+                    pass
+            # 对第1行表头（row3）：向右传播合并单元格的值（如"扣款明细"跨多列）
+            last_val = ""
+            for c in range(1, max_cols + 1):
+                v = hdr_rows[0].get(c, "")
+                if v:
+                    last_val = v
+                hdr_rows[0][c] = last_val
+
+            # ── 写入3行复合表头 ──
+            for hi in range(3):  # hi=0 → row3, 1→row4, 2→row5
+                merge_start = None
+                merge_val = None
+                # 列1：序号（row3），row4/5 空
+                val1 = "序号" if hi == 0 else ""
+                tgt_ws.Cells(r, 1).Value = val1
+                if hi == 0:
+                    tgt_ws.Cells(r, 1).Font.Bold = True
+                # 列2：结算单元名称（替换 row3 的"姓名"），row4/5 空
+                val2 = "结算单元名称" if hi == 0 else ""
+                tgt_ws.Cells(r, 2).Value = val2
+                if hi == 0:
+                    tgt_ws.Cells(r, 2).Font.Bold = True
+                # 数据列3+
+                for vi, orig_c in enumerate(active_cols, 3):
+                    val = hdr_rows[hi].get(orig_c, "")
+                    tgt_ws.Cells(r, vi).Value = val
+                    if hi == 0:
+                        tgt_ws.Cells(r, vi).Font.Bold = True
+                    # 合并同一行中连续相同的非空值
+                    if val and val == merge_val:
+                        pass
+                    else:
+                        if merge_start is not None and vi - 1 > merge_start:
+                            tgt_ws.Range(tgt_ws.Cells(r, merge_start),
+                                         tgt_ws.Cells(r, vi - 1)).Merge()
+                        merge_start = vi if val else None
+                        merge_val = val
+                if merge_start is not None and virtual_cols > merge_start:
+                    tgt_ws.Range(tgt_ws.Cells(r, merge_start),
+                                 tgt_ws.Cells(r, virtual_cols)).Merge()
+                r += 1
+            # 记录数据区域起始行
+            data_start_row = r
 
             # 每个源文件一行
             total_accum = {}
@@ -604,6 +631,23 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                     tgt_ws.Cells(r, vi).NumberFormat = "0.00"
                 tgt_ws.Cells(r, vi).Font.Bold = True
             tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, virtual_cols)).Interior.Color = 0xE8F0FE
+            virtual_end_row = r
+
+            # ── 格式化虚拟表区域 ──
+            # 列宽
+            tgt_ws.Columns(1).ColumnWidth = 5     # 序号
+            tgt_ws.Columns(2).ColumnWidth = 22    # 结算单元名称
+            for vi in range(3, virtual_cols + 1):
+                tgt_ws.Columns(vi).ColumnWidth = 12
+            # 边框 + 换行：表头行起至合计行
+            brd = tgt_ws.Range(tgt_ws.Cells(data_start_row - 3, 1),
+                               tgt_ws.Cells(virtual_end_row, virtual_cols))
+            brd.Borders.LineStyle = 1  # xlContinuous
+            brd.Borders.Weight = 2     # xlThin
+            brd.WrapText = True
+            # 结算单元名列左对齐（默认居中）
+            tgt_ws.Range(tgt_ws.Cells(data_start_row - 3, 2),
+                         tgt_ws.Cells(virtual_end_row, 2)).HorizontalAlignment = 1  # xlLeft
             r += 2
 
             # ── 复制源工资表 ──
