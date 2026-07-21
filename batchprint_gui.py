@@ -366,8 +366,8 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                               merge_different_months=True,
                               merge_by_big_org=True,
                               filename_simple=True,
-                              progress_callback=None,
-                              dedup_callback=None):
+                               progress_callback=None,
+                               dedup_callback=None):
     """
     高级合并银行报盘文件，支持三种合并策略开关。
 
@@ -439,6 +439,8 @@ def merge_bank_files_advanced(bank_dir, output_dir,
         return [], [f"模板文件不存在: {bank_tmpl_path}"], {}
 
     warnings_list = []
+    file_dedup_log = []  # 跟踪文件级去重决策（跨子组+同子组）
+    global_fp_cache = defaultdict(dict)  # big_org → {frozenset: filename} 跨子组文件签名缓存
     output_files = []
     all_operation_records = []  # 收集每条数据的来龙去脉
     stats = {
@@ -448,6 +450,8 @@ def merge_bank_files_advanced(bank_dir, output_dir,
         "excluded_units": set(u for _, _, u, _, _, ex in classified if ex),
         "big_orgs": set(),
         "bank_counts": defaultdict(int),
+        "file_dedup_log": file_dedup_log,
+        "skip_files_list": skip_files,
     }
 
     total_groups = len(groups)
@@ -541,8 +545,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                 bank_counts[bank] += len(rows)
                 yearmons_in_sub.add(yearmon)
 
-            # 文件级去重：同一子组内内容完全相同的文件只保留一份
-            file_sigs = defaultdict(list)
+            current_file_sigs = defaultdict(list)
             for rec in all_operation_records[records_before:]:
                 if rec.get("filtered_reason"):
                     continue
@@ -550,16 +553,28 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                 a = str(rec.get("name", "")).strip()
                 if not p and not a:
                     continue
-                file_sigs[rec["source_file"]].append((rec["source_yearmon"], p or "", a or "", float(rec["amount"])))
+                current_file_sigs[rec["source_file"]].append(
+                    (rec["source_yearmon"], p or "", a or "", float(rec["amount"]))
+                )
             skip_files_set = set()
-            fp_cache = {}
-            for fname in sorted(file_sigs):
-                fp = frozenset(file_sigs[fname])
+            local_fp_cache = {}
+
+            for fname in sorted(current_file_sigs):
+                fp = frozenset(current_file_sigs[fname])
                 if not fp:
                     continue
-                if fp in fp_cache:
-                    origin = fp_cache[fp]
-                    # 优先建议剔除带复制后缀的文件
+                file_big_org = None
+                for rec in all_operation_records[records_before:]:
+                    if rec.get("filtered_reason"):
+                        continue
+                    if rec["source_file"] == fname:
+                        file_big_org = rec["big_org"]
+                        break
+                if file_big_org is None:
+                    continue
+
+                if fp in global_fp_cache.get(file_big_org, {}):
+                    origin = global_fp_cache[file_big_org][fp]
                     stem_dup = os.path.splitext(fname)[0]
                     stem_org = os.path.splitext(origin)[0]
                     if stem_org != _normalize_unit_name(stem_org) and stem_dup == _normalize_unit_name(stem_dup):
@@ -572,13 +587,50 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                     if action == "skip_dup":
                         skip_files_set.add(dedup_target)
                         warnings_list.append(f"文件重复已去重：{dedup_target} 与 {keep_target} 内容完全相同，已剔除 {dedup_target}")
+                        file_dedup_log.append({"dedup_file": dedup_target, "keep_file": keep_target, "action": "已剔除"})
                     else:
                         warnings_list.append(f"文件重复（已保留两份）：{fname} 与 {origin} 内容完全相同")
+                        file_dedup_log.append({"dedup_file": fname, "keep_file": origin, "action": "已保留两份"})
+                    continue
+
+                if fp in local_fp_cache:
+                    origin = local_fp_cache[fp]
+                    stem_dup = os.path.splitext(fname)[0]
+                    stem_org = os.path.splitext(origin)[0]
+                    if stem_org != _normalize_unit_name(stem_org) and stem_dup == _normalize_unit_name(stem_dup):
+                        dedup_target, keep_target = origin, fname
+                    else:
+                        dedup_target, keep_target = fname, origin
+                    action = "keep_both"
+                    if dedup_callback:
+                        action = dedup_callback(dedup_target, keep_target)
+                    if action == "skip_dup":
+                        skip_files_set.add(dedup_target)
+                        warnings_list.append(f"文件重复已去重：{dedup_target} 与 {keep_target} 内容完全相同，已剔除 {dedup_target}")
+                        file_dedup_log.append({"dedup_file": dedup_target, "keep_file": keep_target, "action": "已剔除"})
+                    else:
+                        warnings_list.append(f"文件重复（已保留两份）：{fname} 与 {origin} 内容完全相同")
+                        file_dedup_log.append({"dedup_file": fname, "keep_file": origin, "action": "已保留两份"})
                 else:
-                    fp_cache[fp] = fname
+                    local_fp_cache[fp] = fname
+
+            for fname in sorted(current_file_sigs):
+                if fname in skip_files_set:
+                    continue
+                fp = frozenset(current_file_sigs[fname])
+                if not fp:
+                    continue
+                for rec in all_operation_records[records_before:]:
+                    if rec.get("filtered_reason"):
+                        continue
+                    if rec["source_file"] == fname:
+                        bg = rec["big_org"]
+                        if fp not in global_fp_cache[bg]:
+                            global_fp_cache[bg][fp] = fname
+                        break
+
             if skip_files_set:
                 keep_flags = []
-                row_pos = 0
                 for rec in all_operation_records[records_before:]:
                     if rec.get("filtered_reason"):
                         continue
@@ -587,10 +639,9 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                         keep_flags.append(False)
                     else:
                         keep_flags.append(True)
-                    row_pos += 1
                 all_rows[:] = [r for r, keep in zip(all_rows, keep_flags) if keep]
 
-            # 同单位同月份同人同样金额重复检测
+            # 同单位同月份同人同样金额重复检测（行级）
             dup_groups = defaultdict(list)
             for rec in all_operation_records[records_before:]:
                 if rec.get("filtered_reason"):
@@ -825,7 +876,9 @@ def merge_bank_files_advanced(bank_dir, output_dir,
 
     # 生成操作记录 Excel
     if all_operation_records:
-        op_record_path = _generate_operation_record(output_dir, all_operation_records, stats, output_files)
+        file_dedup_log = stats.get("file_dedup_log", [])
+        skip_files_list = stats.get("skip_files_list", [])
+        op_record_path = _generate_operation_record(output_dir, all_operation_records, stats, output_files, file_dedup_log, skip_files_list)
         if op_record_path:
             warnings_list.append(f"操作记录已生成: {os.path.basename(op_record_path)}")
 
@@ -835,7 +888,7 @@ def merge_bank_files_advanced(bank_dir, output_dir,
     return output_files, warnings_list, stats
 
 
-def _generate_operation_record(output_dir, records, stats, output_files):
+def _generate_operation_record(output_dir, records, stats, output_files, file_dedup_log=None, skip_files_list=None):
     """生成操作记录 Excel，追踪每条数据从哪个原始文件到哪个输出文件。"""
     import openpyxl
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, numbers
@@ -918,6 +971,11 @@ def _generate_operation_record(output_dir, records, stats, output_files):
         ("", ""),
         ("输出文件清单", ""),
     ]
+    if skip_files_list:
+        summary_rows.append(("", ""))
+        summary_rows.append(("文件名不合规，已跳过", ""))
+        for sf in skip_files_list:
+            summary_rows.append((sf, "文件名格式不符合 YYYYMM-银行-单位名.xls"))
     for path in sorted(output_files):
         basename = os.path.basename(path)
         group_rows = sum(1 for r in records if r["output_file"] == basename)
@@ -936,6 +994,32 @@ def _generate_operation_record(output_dir, records, stats, output_files):
             c2.font = Font(size=8)
     ws2.column_dimensions['A'].width = 60
     ws2.column_dimensions['B'].width = 20
+
+    if file_dedup_log:
+        ws3 = wb.create_sheet("文件去重记录")
+        dedup_headers = ["序号", "被剔除文件", "保留文件", "操作", "详情"]
+        for c, h in enumerate(dedup_headers, 1):
+            cell = ws3.cell(1, c, h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
+            cell.border = Border(top=thin, bottom=thin, left=thin, right=thin)
+        for i, entry in enumerate(file_dedup_log, 1):
+            r = i + 1
+            ws3.cell(r, 1, i).alignment = data_align
+            ws3.cell(r, 2, entry.get("dedup_file", "")).alignment = data_align
+            ws3.cell(r, 3, entry.get("keep_file", "")).alignment = data_align
+            ws3.cell(r, 4, entry.get("action", "")).alignment = data_align
+            ws3.cell(r, 5, entry.get("detail", "")).alignment = data_align
+            for c in range(1, 6):
+                ws3.cell(r, c).border = Border(top=thin, bottom=thin, left=thin, right=thin)
+        ws3.column_dimensions['A'].width = 8
+        ws3.column_dimensions['B'].width = 52
+        ws3.column_dimensions['C'].width = 52
+        ws3.column_dimensions['D'].width = 14
+        ws3.column_dimensions['E'].width = 36
+        ws3.auto_filter.ref = f"A1:E{len(file_dedup_log) + 1}"
+        ws3.freeze_panes = "A2"
 
     wb.save(out_path)
     return out_path
@@ -3989,6 +4073,11 @@ class BatchPrintGUI:
             self.log(f"  ⚠ 警告 ({len(warnings)} 条)：")
             for w in warnings:
                 self.log(f"    - {w}")
+            skip_warnings = [w for w in warnings if "文件名不符合格式" in w]
+            if skip_warnings:
+                msg = "以下文件文件名不符合格式（缺少年月或银行），已跳过不处理：\n\n"
+                msg += "\n".join(f"• {w}" for w in skip_warnings)
+                messagebox.showwarning("文件名不合规", msg)
             dup_warnings = [w for w in warnings if "可能重复报盘" in w]
             if dup_warnings:
                 msg = f"发现 {len(dup_warnings)} 条可能重复报盘记录（重复行已排列在操作记录末尾）:\n\n"
