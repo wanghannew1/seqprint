@@ -4064,9 +4064,12 @@ class BatchPrintGUI:
         try:
             out_path, total = convert_bank_format(self.bank_dir, self.output_dir)
         except Exception as e:
-            self.log(f"  ✗ 转换失败：{e}")
-            import traceback
-            self.log(traceback.format_exc())
+            if str(e) == "用户已取消合并":
+                self.log("  ⚠ 用户取消合并")
+            else:
+                self.log(f"  ✗ 合并失败：{e}")
+                import traceback
+                self.log(traceback.format_exc())
             self._set_busy(False)
             return
 
