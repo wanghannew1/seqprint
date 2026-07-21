@@ -603,8 +603,8 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                         _warn(f"文件重复已去重：{dedup_target} 与 {keep_target} 内容完全相同，已剔除 {dedup_target}")
                         file_dedup_log.append({"dedup_file": dedup_target, "keep_file": keep_target, "action": "已剔除"})
                     else:
-                        _warn(f"文件重复（已保留两份）：{fname} 与 {origin} 内容完全相同")
-                        file_dedup_log.append({"dedup_file": fname, "keep_file": origin, "action": "已保留两份"})
+                        _warn(f"文件重复（已保留两份）：{keep_target} 与 {dedup_target} 内容完全相同")
+                        file_dedup_log.append({"dedup_file": dedup_target, "keep_file": keep_target, "action": "已保留两份"})
                     continue
 
                 if fp in local_fp_cache:
@@ -623,8 +623,8 @@ def merge_bank_files_advanced(bank_dir, output_dir,
                         _warn(f"文件重复已去重：{dedup_target} 与 {keep_target} 内容完全相同，已剔除 {dedup_target}")
                         file_dedup_log.append({"dedup_file": dedup_target, "keep_file": keep_target, "action": "已剔除"})
                     else:
-                        _warn(f"文件重复（已保留两份）：{fname} 与 {origin} 内容完全相同")
-                        file_dedup_log.append({"dedup_file": fname, "keep_file": origin, "action": "已保留两份"})
+                        _warn(f"文件重复（已保留两份）：{keep_target} 与 {dedup_target} 内容完全相同")
+                        file_dedup_log.append({"dedup_file": dedup_target, "keep_file": keep_target, "action": "已保留两份"})
                 else:
                     local_fp_cache[fp] = fname
 
