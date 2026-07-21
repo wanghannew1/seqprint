@@ -497,43 +497,9 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
 
             # ── 写入虚拟表头 ──
             r = 1
-            # 第1行：大标题 居中合并
-            title = f"{group_key} 工资表合集"
-            if ym_display:
-                title += f"（{ym_display}）"
-            tgt_ws.Cells(r, 1).Value = title
-            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).Merge()
-            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).Font.Bold = True
-            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).Font.Size = 16
-            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).HorizontalAlignment = -4108
-            r += 1
 
-            # 第2行：单位名称（左） + 填报时间（右）
-            from datetime import datetime
-            tgt_ws.Cells(r, 1).Value = f"单位名称：{group_key}"
-            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).Merge()
-            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).HorizontalAlignment = 1   # xlLeft
-            # 在最右列之上写入填报时间（右对齐）
-            time_col = max_cols if max_cols <= 3 else 4
-            tgt_ws.Cells(r, time_col).Value = f"打印时间：{datetime.now().strftime('%Y年%m月%d日')}"
-            tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, max_cols)).Merge()
-            tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, max_cols)).HorizontalAlignment = -4152  # xlRight
-            r += 2  # 空一行
-
-            # 列头行：序号 | 结算单元名称 | 实际数据列头
-            virtual_headers = ["序号", "结算单元名称"]
-            # 从第3列开始取实际列名（跳过序号/姓名等前2列）
-            data_headers = all_header_names[2:max_cols]
-            virtual_headers += data_headers
-            if len(virtual_headers) < max_cols:
-                virtual_headers += [""] * (max_cols - len(virtual_headers))
-            for c, h in enumerate(virtual_headers, 1):
-                tgt_ws.Cells(r, c).Value = h
-                tgt_ws.Cells(r, c).Font.Bold = True
-            r += 1
-
-            # ── 读取每个源文件的合计行，写出到汇总表 ──
-            file_totals = []  # 每个元素是 {col: value}
+            # ── 读取每个源文件的合计行 ──
+            file_totals = []
             for info in items:
                 row_vals = {}
                 try:
@@ -552,34 +518,93 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                     pass
                 file_totals.append(row_vals)
 
+            # 筛选有数据的列（col 3+，任一源文件有非零数值即保留）
+            active_cols = []
+            for c in range(3, max_cols + 1):
+                has_data = False
+                for ft in file_totals:
+                    v = ft.get(c)
+                    if v is not None:
+                        try:
+                            if float(v) != 0:
+                                has_data = True
+                                break
+                        except (ValueError, TypeError):
+                            if str(v).strip():
+                                has_data = True
+                                break
+                if has_data:
+                    active_cols.append(c)
+            virtual_cols = 2 + len(active_cols)  # 序号 + 结算单元名称 + 数据列
+
+            # 第1行：大标题
+            title = f"{group_key} 工资表合集"
+            if ym_display:
+                title += f"（{ym_display}）"
+            tgt_ws.Cells(r, 1).Value = title
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, virtual_cols)).Merge()
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, virtual_cols)).Font.Bold = True
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, virtual_cols)).Font.Size = 16
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = -4108
+            r += 1
+
+            # 第2行：单位名称（左）+ 打印时间（右）
+            from datetime import datetime
+            tgt_ws.Cells(r, 1).Value = f"单位名称：{group_key}"
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, virtual_cols)).Merge()
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = 1
+            time_col = virtual_cols if virtual_cols <= 3 else 4
+            tgt_ws.Cells(r, time_col).Value = f"打印时间：{datetime.now().strftime('%Y年%m月%d日')}"
+            tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, virtual_cols)).Merge()
+            tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = -4152
+            r += 2
+
+            # 列头行
+            header_map = {}  # col_index → header_name (from row 3)
+            for info in items:
+                for c in range(3, max_cols + 1):
+                    idx = c - 1
+                    if idx < len(info["headers"]):
+                        h = info["headers"][idx]
+                        if h and c not in header_map:
+                            header_map[c] = h
+            tgt_ws.Cells(r, 1).Value = "序号"
+            tgt_ws.Cells(r, 1).Font.Bold = True
+            tgt_ws.Cells(r, 2).Value = "结算单元名称"
+            tgt_ws.Cells(r, 2).Font.Bold = True
+            for vi, c in enumerate(active_cols, 3):
+                h = header_map.get(c, f"列{c}")
+                tgt_ws.Cells(r, vi).Value = h
+                tgt_ws.Cells(r, vi).Font.Bold = True
+            r += 1
+
             # 每个源文件一行
             total_accum = {}
             for idx, (info, ft) in enumerate(zip(items, file_totals), 1):
                 tgt_ws.Cells(r, 1).Value = idx
                 tgt_ws.Cells(r, 2).Value = info["unit_name"]
-                for c in range(3, max_cols + 1):
+                for vi, c in enumerate(active_cols, 3):
                     cv = ft.get(c)
                     if cv is not None:
                         try:
                             val = float(cv)
-                            tgt_ws.Cells(r, c).Value = round(val, 2)
-                            tgt_ws.Cells(r, c).NumberFormat = "0.00"
+                            tgt_ws.Cells(r, vi).Value = round(val, 2)
+                            tgt_ws.Cells(r, vi).NumberFormat = "0.00"
                             total_accum[c] = total_accum.get(c, 0) + val
                         except (ValueError, TypeError):
-                            tgt_ws.Cells(r, c).Value = cv
+                            tgt_ws.Cells(r, vi).Value = cv
                 r += 1
 
             # 合计行
             tgt_ws.Cells(r, 1).Value = "合计"
             tgt_ws.Cells(r, 1).Font.Bold = True
-            for c in range(2, max_cols + 1):
+            for vi, c in enumerate(active_cols, 3):
                 if c in total_accum:
-                    tgt_ws.Cells(r, c).Value = round(total_accum[c], 2)
-                    tgt_ws.Cells(r, c).NumberFormat = "0.00"
-                tgt_ws.Cells(r, c).Font.Bold = True
-            # 合计行加底色
-            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).Interior.Color = 0xE8F0FE
-            r += 2  # 空行后开始粘贴源表
+                    tgt_ws.Cells(r, vi).Value = round(total_accum[c], 2)
+                    tgt_ws.Cells(r, vi).NumberFormat = "0.00"
+                tgt_ws.Cells(r, vi).Font.Bold = True
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, virtual_cols)).Interior.Color = 0xE8F0FE
+            r += 2
 
             # ── 复制源工资表 ──
             current_row = r
