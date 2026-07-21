@@ -4089,6 +4089,10 @@ class BatchPrintGUI:
         opts = dlg.get_options()
 
         self._set_busy(True)
+
+        # 每次点击重新生成输出目录，避免重复生成到同一文件夹
+        self._set_default_output_dir()
+
         self.log("=" * 50)
         self.log("开始高级合并报盘...")
         self.log("")
