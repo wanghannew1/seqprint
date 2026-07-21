@@ -968,18 +968,7 @@ def _generate_operation_record(output_dir, records, stats, output_files, file_de
         ("金额为0已过滤行数", sum(1 for r in records if r.get("filtered_reason"))),
         ("排除项数据行数", sum(1 for r in records if r["is_excluded"])),
         ("生成合并文件数", len(output_files)),
-        ("", ""),
-        ("输出文件清单", ""),
     ]
-    if skip_files_list:
-        summary_rows.append(("", ""))
-        summary_rows.append(("文件名不合规，已跳过", ""))
-        for sf in skip_files_list:
-            summary_rows.append((sf, "文件名格式不符合 YYYYMM-银行-单位名.xls"))
-    for path in sorted(output_files):
-        basename = os.path.basename(path)
-        group_rows = sum(1 for r in records if r["output_file"] == basename)
-        summary_rows.append((basename, f"{group_rows} 行"))
 
     for r, (label, val) in enumerate(summary_rows, 1):
         c1 = ws2.cell(r, 1, label)
@@ -989,11 +978,60 @@ def _generate_operation_record(output_dir, records, stats, output_files, file_de
             c1.fill = header_fill
             c2.font = header_font
             c2.fill = header_fill
-        if label == "":
-            c1.font = Font(size=8)
-            c2.font = Font(size=8)
     ws2.column_dimensions['A'].width = 60
     ws2.column_dimensions['B'].width = 20
+
+    # ── 输出文件清单 sheet ──
+    ws4 = wb.create_sheet("输出文件清单")
+    out_headers = ["序号", "文件名", "数据行数", "总金额"]
+    for c, h in enumerate(out_headers, 1):
+        cell = ws4.cell(1, c, h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = Border(top=thin, bottom=thin, left=thin, right=thin)
+    for i, path in enumerate(sorted(output_files), 1):
+        r = i + 1
+        basename = os.path.basename(path)
+        group_rows = sum(1 for rec in records if rec["output_file"] == basename)
+        group_amount = sum(float(rec["amount"]) for rec in records if rec["output_file"] == basename)
+        ws4.cell(r, 1, i).alignment = data_align
+        ws4.cell(r, 2, basename).alignment = data_align
+        ws4.cell(r, 3, group_rows).alignment = data_align
+        amt_cell = ws4.cell(r, 4, round(group_amount, 2))
+        amt_cell.number_format = "0.00"
+        amt_cell.alignment = data_align
+        for c in range(1, 5):
+            ws4.cell(r, c).border = Border(top=thin, bottom=thin, left=thin, right=thin)
+    ws4.column_dimensions['A'].width = 8
+    ws4.column_dimensions['B'].width = 56
+    ws4.column_dimensions['C'].width = 12
+    ws4.column_dimensions['D'].width = 16
+    ws4.auto_filter.ref = f"A1:D{len(output_files) + 1}"
+    ws4.freeze_panes = "A2"
+
+    # ── 跳过文件 sheet ──
+    if skip_files_list:
+        ws5 = wb.create_sheet("跳过文件")
+        skip_headers = ["序号", "文件名", "原因"]
+        for c, h in enumerate(skip_headers, 1):
+            cell = ws5.cell(1, c, h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
+            cell.border = Border(top=thin, bottom=thin, left=thin, right=thin)
+        for i, sf in enumerate(skip_files_list, 1):
+            r = i + 1
+            ws5.cell(r, 1, i).alignment = data_align
+            ws5.cell(r, 2, sf).alignment = data_align
+            ws5.cell(r, 3, "文件名格式不符合 YYYYMM-银行-单位名.xls").alignment = data_align
+            for c in range(1, 4):
+                ws5.cell(r, c).border = Border(top=thin, bottom=thin, left=thin, right=thin)
+        ws5.column_dimensions['A'].width = 8
+        ws5.column_dimensions['B'].width = 56
+        ws5.column_dimensions['C'].width = 42
+        ws5.auto_filter.ref = f"A1:C{len(skip_files_list) + 1}"
+        ws5.freeze_panes = "A2"
 
     if file_dedup_log:
         ws3 = wb.create_sheet("文件去重记录")
