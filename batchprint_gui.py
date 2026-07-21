@@ -548,13 +548,13 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = -4152
             r += 2
 
-            # ── 读取第1个源文件的2行复合表头（行3-4） ──
-            hdr_rows = [{}, {}]
+            # ── 读取第1个源文件的3行复合表头（行3-5） ──
+            hdr_rows = [{}, {}, {}]
             if items:
                 try:
                     hdr_wb = openpyxl.load_workbook(items[0]["path"])
                     hdr_ws = hdr_wb.active
-                    for hi, hr in enumerate([3, 4]):
+                    for hi, hr in enumerate([3, 4, 5]):
                         for c in range(1, max_cols + 1):
                             v = hdr_ws.cell(row=hr, column=c).value
                             hdr_rows[hi][c] = str(v).strip() if v is not None else ""
@@ -569,12 +569,12 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                     last_val = v
                 hdr_rows[0][c] = last_val
 
-            # ── 写入2行复合表头 ──
+            # ── 写入3行复合表头 ──
             hdr_start_row = r
             col_map = {}
             for vi, oc in enumerate(active_cols, 3):
                 col_map[oc] = vi
-            for hi in range(2):
+            for hi in range(3):
                 val1 = "序号" if hi == 0 else ""
                 tgt_ws.Cells(r, 1).Value = val1
                 if hi == 0:
@@ -591,27 +591,31 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                 r += 1
             hdr_end_row = r - 1
 
-            # 第2行（row4 source→ virtual row5）水平合并：养老/失业/医疗/公积金 各跨2列
+            # 第2行水平合并（row4 source→virtual row5）：养老/失业/医疗/公积金各跨2列
             row4_h_merges = [(17, 18), (19, 20), (21, 22), (24, 25)]
+            hmerged = set()
             for c1, c2 in row4_h_merges:
                 vc1 = col_map.get(c1)
                 vc2 = col_map.get(c2)
                 if vc1 is not None and vc2 is not None and vc1 < vc2:
                     tgt_ws.Range(tgt_ws.Cells(hdr_start_row + 1, vc1),
                                  tgt_ws.Cells(hdr_start_row + 1, vc2)).Merge()
-            # 收集已水平合并的列（跳过垂直合并）
-            hmerged = set()
-            for c1, c2 in row4_h_merges:
-                vc1 = col_map.get(c1)
-                vc2 = col_map.get(c2)
-                if vc1 is not None and vc2 is not None:
                     hmerged.update(range(vc1, vc2 + 1))
-            # 垂直合并：对第2行为空的列跨行合并（跳过已水平合并的）
+            # 第2-3行纵向合并（Z4:Z5→单位代理费, AA4:AA5→扣款合计）
+            row45_v_merges = [(26, 26), (27, 27)]
+            for c1, c2 in row45_v_merges:
+                vc = col_map.get(c1)
+                if vc is not None:
+                    tgt_ws.Range(tgt_ws.Cells(hdr_start_row + 1, vc),
+                                 tgt_ws.Cells(hdr_start_row + 2, vc)).Merge()
+                    hmerged.add(vc)
+            # 简单列纵向合并：第2行和第3行均为空 → 跨3行合并（跳过已水平/纵向合并的列）
             for vi in range(1, virtual_cols + 1):
                 if vi in hmerged:
                     continue
-                val2 = tgt_ws.Cells(hdr_start_row + 1, vi).Value
-                if not val2:
+                val4 = tgt_ws.Cells(hdr_start_row + 1, vi).Value
+                val5 = tgt_ws.Cells(hdr_start_row + 2, vi).Value
+                if not val4 and not val5:
                     tgt_ws.Range(tgt_ws.Cells(hdr_start_row, vi),
                                  tgt_ws.Cells(hdr_end_row, vi)).Merge()
             # 记录数据区域起始行
