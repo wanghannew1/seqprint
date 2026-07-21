@@ -356,6 +356,253 @@ def get_big_org(unit_name):
         if big_org:
             return big_org, unit_name
         return unit_name, unit_name
+
+
+# ── 工资表简单合并（按大单位堆叠） ──────────────────────────
+
+def _extract_unit_from_signed(fname):
+    """从 signed_ 文件名中提取单位名"""
+    base = fname[len("signed_"):] if fname.startswith("signed_") else fname
+    # 匹配年月模式：202606、2026年06月、2026年6月
+    m = re.search(r'\d{4}[年]?\d{1,2}[月]?', base)
+    if m:
+        return base[:m.start()].strip().rstrip("-—_")
+    # 回退：去掉 .xlsx 后缀
+    return base.rsplit(".", 1)[0].strip()
+
+
+def _extract_yearmon_from_signed(fname):
+    """从 signed_ 文件名中提取年月字符串（如 202606）"""
+    m = re.search(r'(\d{4})[年]?(\d{1,2})[月]?', fname)
+    if m:
+        return m.group(1) + m.group(2).zfill(2)
+    return ""
+
+
+def _format_yearmons(yearmons):
+    """格式化年月集合为显示字符串：连续用 -，不连续用 、"""
+    sorted_ym = sorted(set(ym for ym in yearmons if ym))
+    if not sorted_ym:
+        return ""
+    groups = []
+    cur = [sorted_ym[0]]
+    for ym in sorted_ym[1:]:
+        prev = int(cur[-1])
+        cur_i = int(ym)
+        if cur_i == prev + 1 or (cur_i % 100 == 1 and prev % 100 == 12 and cur_i // 100 == prev // 100 + 1):
+            cur.append(ym)
+        else:
+            groups.append(cur)
+            cur = [ym]
+    groups.append(cur)
+    parts = []
+    for g in groups:
+        if len(g) >= 2:
+            parts.append(f"{g[0]}-{g[-1]}")
+        else:
+            parts.append(g[0])
+    return "、".join(parts)
+
+
+def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
+    """
+    合并工资表：扫描 signed_*.xlsx，按映射规则分组，每组输出一个 xlsx。
+    最上方为虚拟表（大单位名+年月范围+全部列头+合计行），
+    下方为各原始工资表整表原样堆叠（含签字图片）。
+    使用 win32com (WPS) 跨 workbook 复制以保留格式/图片。
+    """
+    import win32com.client
+
+    warnings_list = []
+
+    # ── 1. 扫描文件夹及子文件夹 ──
+    signed_files = []
+    for root, _dirs, files in os.walk(payroll_dir):
+        for f in files:
+            if f.startswith("signed_") and f.endswith(".xlsx") and not f.startswith("~$"):
+                signed_files.append(os.path.join(root, f))
+    signed_files.sort()
+
+    if not signed_files:
+        return [], ["未找到 signed_*.xlsx 文件"], {}
+
+    # ── 2. 提取信息 ──
+    file_infos = []
+    for fpath in signed_files:
+        fname = os.path.basename(fpath)
+        unit_name = _extract_unit_from_signed(fname)
+        yearmon = _extract_yearmon_from_signed(fname)
+        big_org, _ = get_big_org(unit_name)
+        excluded = is_excluded(unit_name)
+        file_infos.append({
+            "path": fpath, "fname": fname, "unit_name": unit_name,
+            "big_org": big_org, "excluded": excluded, "yearmon": yearmon,
+        })
+
+    # ── 3. 分组 ──
+    groups = defaultdict(list)
+    for info in file_infos:
+        key = info["unit_name"] if info["excluded"] else info["big_org"]
+        groups[key].append(info)
+
+    if progress_callback:
+        progress_callback(0, len(groups), f"共 {len(signed_files)} 个工资表，分为 {len(groups)} 组")
+
+    output_files = []
+
+    # ── 4. 启动 WPS ──
+    app = None
+    try:
+        app = win32com.client.DispatchEx("KET.Application")
+        app.Visible = False
+        app.DisplayAlerts = False
+
+        for group_idx, (group_key, items) in enumerate(groups.items(), 1):
+            if progress_callback:
+                progress_callback(group_idx, len(groups),
+                                  f"合并组: {group_key}（{len(items)} 个工资表）")
+
+            all_yearmons = set(info["yearmon"] for info in items)
+            ym_display = _format_yearmons(all_yearmons)
+
+            # 扫描每个源文件的最大列数（用于虚拟表）
+            max_cols = 0
+            for info in items:
+                src_wb_check = openpyxl.load_workbook(info["path"])
+                src_ws_check = src_wb_check.active
+                info["ncols"] = src_ws_check.max_column or 1
+                info["nrows"] = src_ws_check.max_row or 1
+                max_cols = max(max_cols, info["ncols"])
+                src_wb_check.close()
+
+            # ── 创建目标 workbook ──
+            tgt_wb = app.Workbooks.Add()
+            tgt_ws = tgt_wb.ActiveSheet
+            tgt_ws.Name = group_key
+
+            # ── 写入虚拟表头 ──
+            r = 1
+            title = f"{group_key} 工资表合集"
+            if ym_display:
+                title += f"（{ym_display}）"
+            tgt_ws.Cells(r, 1).Value = title
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).Merge()
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).Font.Bold = True
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).Font.Size = 16
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).HorizontalAlignment = -4108
+            r += 2  # 标题行 + 空行
+
+            # 列头行
+            col_headers = ["序号", "姓名"] + [f"列{i}" for i in range(3, max_cols + 1)]
+            col_headers = col_headers[:max_cols]
+            for c, h in enumerate(col_headers, 1):
+                tgt_ws.Cells(r, c).Value = h
+                tgt_ws.Cells(r, c).Font.Bold = True
+            r += 1
+
+            # 合计行：从每个源表的合计行读取数据
+            total_values = {}
+            for info in items:
+                try:
+                    src_rb = openpyxl.load_workbook(info["path"], data_only=True)
+                    src_ws_r = src_rb.active
+                    # 找合计行（从最后一行往前找）
+                    src_nrows = src_ws_r.max_row or 1
+                    for check_r in range(src_nrows, 0, -1):
+                        v = src_ws_r.cell(row=check_r, column=1).value
+                        if v and "合计" in str(v):
+                            total_row = check_r
+                            for c in range(1, min(info["ncols"], max_cols) + 1):
+                                cv = src_ws_r.cell(row=total_row, column=c).value
+                                try:
+                                    total_values[c] = total_values.get(c, 0) + float(cv)
+                                except (ValueError, TypeError):
+                                    if cv is not None and "合计" not in str(cv):
+                                        total_values[c] = cv  # 非数字直接覆盖
+                            break
+                    src_rb.close()
+                except Exception:
+                    pass
+
+            tgt_ws.Cells(r, 1).Value = "合计"
+            tgt_ws.Cells(r, 1).Font.Bold = True
+            for c in range(2, max_cols + 1):
+                if c in total_values:
+                    v = total_values[c]
+                    if isinstance(v, float):
+                        tgt_ws.Cells(r, c).Value = round(v, 2)
+                        tgt_ws.Cells(r, c).NumberFormat = "0.00"
+                    else:
+                        tgt_ws.Cells(r, c).Value = v
+                tgt_ws.Cells(r, c).Font.Bold = True
+            # 合计行加底色
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).Interior.Color = 0xE8F0FE
+            r += 1
+
+            # 填报信息行
+            from datetime import datetime
+            tgt_ws.Cells(r, 1).Value = "制表人："
+            tgt_ws.Cells(r, 4).Value = f"填报时间：{datetime.now().strftime('%Y年%m月%d日 %H:%M')}"
+            row_after_virtual = r + 2  # 虚拟表结束，空一行后开始复制源表
+
+            # ── 复制源工资表 ──
+            current_row = row_after_virtual
+            for info in items:
+                try:
+                    src_wb = app.Workbooks.Open(info["path"])
+                    src_ws = src_wb.ActiveSheet
+                    src_last_row = src_ws.UsedRange.Rows.Count
+                    src_last_col = src_ws.UsedRange.Columns.Count
+
+                    src_range = src_ws.Range(src_ws.Cells(1, 1),
+                                             src_ws.Cells(src_last_row, src_last_col))
+                    src_range.Copy()
+
+                    tgt_ws.Activate()
+                    tgt_cell = tgt_ws.Cells(current_row, 1)
+                    tgt_ws.Paste(tgt_cell)
+
+                    app.CutCopyMode = False
+                    src_wb.Close(SaveChanges=False)
+
+                    current_row += src_last_row + 1
+                except Exception as e:
+                    warnings_list.append(f"复制失败: {info['fname']} - {e}")
+
+            # ── 页面设置 ──
+            tgt_ws.PageSetup.Orientation = 2          # xlLandscape
+            tgt_ws.PageSetup.PaperSize = 9            # xlPaperA4
+            tgt_ws.PageSetup.FitToPagesWide = 1       # 列缩放到一页宽
+            tgt_ws.PageSetup.FitToPagesTall = 0       # 行不限制页数
+            tgt_ws.PageSetup.Zoom = False             # 禁用缩放，启用 FitToPages
+
+            # ── 保存 ──
+            ym_part = f"_{ym_display}" if ym_display else ""
+            safe_key = group_key.replace("/", "／").replace("\\", "／").replace(":", "：")
+            output_name = f"{safe_key}_工资表合集{ym_part}.xlsx"
+            output_path = os.path.join(output_dir, output_name)
+            os.makedirs(output_dir, exist_ok=True)
+            if os.path.exists(output_path):
+                os.remove(output_path)  # WPS 在已有文件时 SaveAs 会提示覆盖
+            tgt_wb.SaveAs(output_path)
+            tgt_wb.Close(SaveChanges=True)
+            output_files.append(output_path)
+
+        if progress_callback:
+            progress_callback(len(groups), len(groups),
+                              f"完成！生成 {len(output_files)} 个合并工资表文件")
+
+    except Exception as e:
+        warnings_list.append(f"WPS 合并失败：{e}")
+        raise
+    finally:
+        if app:
+            try:
+                app.Quit()
+            except Exception:
+                pass
+
+    return output_files, warnings_list, {"total_groups": len(groups)}
     # 无匹配规则时，用去后缀后的规范化名作为大单位名
     norm = _normalize_unit_name(unit_name)
     return norm, unit_name
@@ -3596,6 +3843,22 @@ class BatchPrintGUI:
         )
         self.adv_merge_btn.pack(side=tk.LEFT, padx=(6, 0))
 
+        # 第四行：工资表简单合并
+        row4 = tk.Frame(btn_box)
+        row4.pack(fill=tk.X, pady=(4, 0))
+
+        self.merge_payroll_simple_btn = tk.Button(
+            row4,
+            text="合并工资表（简单堆叠）",
+            command=self.run_merge_payrolls_simple,
+            bg="#1a6b3c",
+            fg="white",
+            font=("微软雅黑", 11, "bold"),
+            padx=16,
+            pady=4,
+        )
+        self.merge_payroll_simple_btn.pack(side=tk.LEFT)
+
         # 分隔线
         sep = tk.Frame(self.root, height=2, bd=1, relief=tk.SUNKEN)
         sep.pack(fill=tk.X, padx=10, pady=6)
@@ -4172,6 +4435,58 @@ class BatchPrintGUI:
 
         self.log("")
         self.log("高级合并完成。")
+        self.log("=" * 50)
+        self._set_busy(False)
+
+    # ── 合并工资表（简单堆叠） ──────────────────────────
+
+    def run_merge_payrolls_simple(self):
+        if not self.bank_dir:
+            messagebox.showwarning("提示", "请先选择包含 signed_ 工资表的目录")
+            return
+        if not self.output_dir:
+            messagebox.showwarning("提示", "请先选择输出目录")
+            return
+
+        self._set_busy(True)
+        self._set_default_output_dir()
+
+        self.log("=" * 50)
+        self.log("开始合并工资表（简单堆叠）...")
+        self.log("")
+        self.log(f"  工资表目录：{self.bank_dir}")
+        self.log(f"  输出目录：{self.output_dir}")
+
+        def progress_cb(current, total, message):
+            self.log(f"  [{current}/{total}] {message}")
+            self.root.update()
+
+        try:
+            output_files, warnings, stats = merge_payrolls_simple(
+                self.bank_dir, self.output_dir,
+                progress_callback=progress_cb,
+            )
+        except Exception as e:
+            self.log(f"  ✗ 合并失败：{e}")
+            import traceback
+            self.log(traceback.format_exc())
+            self._set_busy(False)
+            return
+
+        self.log("")
+        self.log(f"  📁 输出目录：{self.output_dir}")
+        if output_files:
+            self.log(f"  ✓ 生成 {len(output_files)} 个合并工资表文件：")
+            for fpath in sorted(output_files):
+                self.log(f"    {os.path.basename(fpath)}")
+
+        if warnings:
+            self.log_warning(f"  ⚠ 警告 ({len(warnings)} 条)：")
+            for w in warnings:
+                self.log_warning(f"    - {w}")
+
+        self.log("")
+        self.log("工资表合并完成。")
         self.log("=" * 50)
         self._set_busy(False)
 
