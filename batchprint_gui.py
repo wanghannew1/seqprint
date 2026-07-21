@@ -515,7 +515,7 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, max_cols)).HorizontalAlignment = 1   # xlLeft
             # 在最右列之上写入填报时间（右对齐）
             time_col = max_cols if max_cols <= 3 else 4
-            tgt_ws.Cells(r, time_col).Value = f"填报时间：{datetime.now().strftime('%Y年%m月%d日')}"
+            tgt_ws.Cells(r, time_col).Value = f"打印时间：{datetime.now().strftime('%Y年%m月%d日')}"
             tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, max_cols)).Merge()
             tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, max_cols)).HorizontalAlignment = -4152  # xlRight
             r += 2  # 空一行
