@@ -412,6 +412,7 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
     下方为各原始工资表整表原样堆叠（含签字图片）。
     使用 win32com (WPS) 跨 workbook 复制以保留格式/图片。
     """
+    from collections import defaultdict
     import win32com.client
 
     warnings_list = []
