@@ -563,8 +563,21 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             for fpf in file_fingerprints:
                 for c, fp in fpf.items():
                     if c >= 7 and fp != ("", "", "") and fp not in seen_fp:
-                        canonical_fps.append(fp)
                         seen_fp.add(fp)
+                        # 插入到同级 r3v 第一个"合计"项之前（如"公务员医疗补助"放到"扣款合计"前面）
+                        # 而非简单追加到末尾——避免跨段合计排序失效
+                        insert_idx = len(canonical_fps)  # 默认追加
+                        same_r3v_last = -1
+                        for idx, existing_fp in enumerate(canonical_fps):
+                            if existing_fp[0] == fp[0]:
+                                same_r3v_last = idx
+                                if "合计" in existing_fp[1]:
+                                    insert_idx = idx
+                                    break
+                        if insert_idx == len(canonical_fps) and same_r3v_last >= 0:
+                            # 同 r3v 组无"合计"项 → 插到本组末尾（其他组之前）
+                            insert_idx = same_r3v_last + 1
+                        canonical_fps.insert(insert_idx, fp)
             virtual_cols = 2 + len(canonical_fps)
 
             # ── 每个文件的列映射 {规范位置 → 源列号} ──
