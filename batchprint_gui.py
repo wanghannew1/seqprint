@@ -499,26 +499,29 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                     src_nrows = src_ws.max_row or 1
                     src_ncols = src_ws.max_column or 1
 
-                    # 填充行3-5范围内的合并格（横竖都填）
-                    for mc in list(src_ws.merged_cells.ranges):
+                    # 构建合并格查找表：对于行3-5范围内的合并区域，记录每格 → 左上角值
+                    merge_lookup = {}
+                    for mc in src_ws.merged_cells.ranges:
                         mr1, mr2 = mc.min_row, mc.max_row
                         mc1, mc2 = mc.min_col, mc.max_col
                         if mr2 >= 3 and mr1 <= 5:
-                            tl = src_ws.cell(row=max(mr1, 3), column=mc1).value
+                            tl = src_ws.cell(row=mc.min_row, column=mc.min_col).value
                             if tl is not None:
                                 tl_s = str(tl).strip()
                                 for rr in range(max(mr1, 3), min(mr2, 5) + 1):
                                     for cc in range(mc1, mc2 + 1):
-                                        src_ws.cell(row=rr, column=cc).value = tl_s
+                                        merge_lookup[(rr, cc)] = tl_s
+
+                    def _cv(row, col):
+                        """取单元格值，合并格返回左上角值"""
+                        if (row, col) in merge_lookup:
+                            return merge_lookup[(row, col)]
+                        v = src_ws.cell(row=row, column=col).value
+                        return str(v).strip() if v is not None else ""
 
                     # 生成列指纹 (r3v, r4v, r5v)
                     for c in range(1, src_ncols + 1):
-                        r3v = src_ws.cell(row=3, column=c).value
-                        r4v = src_ws.cell(row=4, column=c).value
-                        r5v = src_ws.cell(row=5, column=c).value
-                        fp = (str(r3v).strip() if r3v is not None else "",
-                              str(r4v).strip() if r4v is not None else "",
-                              str(r5v).strip() if r5v is not None else "")
+                        fp = (_cv(3, c), _cv(4, c), _cv(5, c))
                         fp_dict[c] = fp
 
                     # 找合计行（严格匹配）
@@ -548,17 +551,18 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             ref_idx = next(idx for idx, c in enumerate(variant_counts) if c == most_common_cnt)
             ref_fp = file_fingerprints[ref_idx]
 
-            # 参考文件的列序（col 3+）→ 去重 + 追加其他变体的独有列
+            # 参考文件的列序（col 7+ 数据列）→ 去重 + 追加其他变体的独有列
+            # C1-C6 为序号/姓名等，由虚拟表前2列覆盖，不纳入指纹匹配
             canonical_fps = []
             seen_fp = set()
-            for c in range(3, max_cols + 1):
+            for c in range(7, max_cols + 1):
                 fp = ref_fp.get(c, ("", "", ""))
                 if fp != ("", "", "") and fp not in seen_fp:
                     canonical_fps.append(fp)
                     seen_fp.add(fp)
             for fpf in file_fingerprints:
                 for c, fp in fpf.items():
-                    if c >= 3 and fp != ("", "", "") and fp not in seen_fp:
+                    if c >= 7 and fp != ("", "", "") and fp not in seen_fp:
                         canonical_fps.append(fp)
                         seen_fp.add(fp)
             virtual_cols = 2 + len(canonical_fps)
