@@ -546,7 +546,7 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             tgt_ws.Cells(r, time_col).Value = f"打印时间：{datetime.now().strftime('%Y年%m月%d日')}"
             tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, virtual_cols)).Merge()
             tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = -4152
-            r += 2
+            r += 1
 
             # ── 读取第1个源文件的3行复合表头（行3-5） ──
             hdr_rows = [{}, {}, {}]
