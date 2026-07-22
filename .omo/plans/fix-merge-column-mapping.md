@@ -112,7 +112,7 @@ for fpf in file_fingerprints:
 
 ## TODOs
 
-- [ ] 1. 改造 `merge_payrolls_simple()`：替换 `active_cols` + `hdr_rows` + `src_merges` 为指纹映射机制
+- [x] 1. 改造 `merge_payrolls_simple()`：替换 `active_cols` + `hdr_rows` + `src_merges` 为指纹映射机制
 
   **改动范围**：`batchprint_gui.py` 中 `merge_payrolls_simple()` 函数，从 `# 读取每个源文件的合计行` 到 `r += 2`（约180行）
 
