@@ -431,10 +431,31 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
         return [], ["未找到 signed_*.xlsx 文件"], {}
 
     # ── 2. 提取信息 ──
+    def _extract_unit_from_sheet(fpath):
+        """从工资表文件内容行2取单位名，比从文件名提取更可靠"""
+        try:
+            wb = openpyxl.load_workbook(fpath)
+            ws = wb.active
+            for c in range(1, 4):
+                v = ws.cell(row=2, column=c).value
+                if v and "名称" in str(v):
+                    # "名称：吉林大学XX学院" → 取冒号后
+                    m = re.search(r'[：:]\s*(.*)', str(v))
+                    if m and m.group(1).strip():
+                        return m.group(1).strip()
+                    # "名称" 在 C1，"：吉林大学XX学院" 在 C2
+                    nv = ws.cell(row=2, column=c + 1).value
+                    if nv and nv.strip().lstrip("：: "):
+                        return str(nv).strip().lstrip("：: ")
+            wb.close()
+        except Exception:
+            pass
+        return ""
+
     file_infos = []
     for fpath in signed_files:
         fname = os.path.basename(fpath)
-        unit_name = _extract_unit_from_signed(fname)
+        unit_name = _extract_unit_from_sheet(fpath) or _extract_unit_from_signed(fname)
         yearmon = _extract_yearmon_from_signed(fname)
         big_org, _ = get_big_org(unit_name)
         excluded = is_excluded(unit_name)
