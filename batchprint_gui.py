@@ -745,21 +745,35 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                     vk = vl
                 vi = vj
 
-            # 纵向合并：行4有值且(行5为空 或 行4==行5) → 行4-5合并
-            # 行4==行5情形：单一列头（如"公务员医疗补助""基本工资"）在行4、行5重复出现，应合并
+            # 纵向合并：行4有值且(行5为空 或 行4==行5) → 行4-5(或行3-5)合并
+            # 情形A：r3v==r4v==r5v（三行完全相同的列头，如"基本工资""个人所得税"）→ 合3行
+            # 情形B：仅r4v==r5v但r3v不同（如扣款明细区内的"单位代理费""扣款合计"）→ 合2行
+            # 情形C：r4v有值但r5v为空 → 合2行（原逻辑）
             for vi in range(3, virtual_cols + 1):
+                r3v = tgt_ws.Cells(hdr_start_row, vi).Value
                 r4v = tgt_ws.Cells(hdr_start_row + 1, vi).Value
                 r5v = tgt_ws.Cells(hdr_start_row + 2, vi).Value
                 if r4v and (not r5v or r4v == r5v):
-                    already = any((rr, vi) in hmerged for rr in range(hdr_start_row + 1, hdr_end_row + 1))
-                    if not already:
-                        try:
-                            tgt_ws.Range(tgt_ws.Cells(hdr_start_row + 1, vi),
-                                         tgt_ws.Cells(hdr_end_row, vi)).Merge()
-                            for rr in range(hdr_start_row + 1, hdr_end_row + 1):
-                                hmerged.add((rr, vi))
-                        except Exception:
-                            pass
+                    if r3v and r3v == r4v:
+                        # 情形A：合3行
+                        if not any((rr, vi) in hmerged for rr in range(hdr_start_row, hdr_end_row + 1)):
+                            try:
+                                tgt_ws.Range(tgt_ws.Cells(hdr_start_row, vi),
+                                             tgt_ws.Cells(hdr_end_row, vi)).Merge()
+                                for rr in range(hdr_start_row, hdr_end_row + 1):
+                                    hmerged.add((rr, vi))
+                            except Exception:
+                                pass
+                    else:
+                        # 情形B/C：合2行（行4-5）
+                        if not any((rr, vi) in hmerged for rr in range(hdr_start_row + 1, hdr_end_row + 1)):
+                            try:
+                                tgt_ws.Range(tgt_ws.Cells(hdr_start_row + 1, vi),
+                                             tgt_ws.Cells(hdr_end_row, vi)).Merge()
+                                for rr in range(hdr_start_row + 1, hdr_end_row + 1):
+                                    hmerged.add((rr, vi))
+                            except Exception:
+                                pass
 
             # 其余列：行4+行5都为空 → 跨3行合并
             for vi in range(1, virtual_cols + 1):
