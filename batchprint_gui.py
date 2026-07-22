@@ -497,7 +497,7 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                     src_nrows = src_ws_r.max_row or 1
                     for check_r in range(src_nrows, 0, -1):
                         v = src_ws_r.cell(row=check_r, column=1).value
-                        if v and "合计" in str(v):
+                        if v and str(v).strip() == "合计":
                             for c in range(1, max_cols + 1):
                                 cv = src_ws_r.cell(row=check_r, column=c).value
                                 row_vals[c] = cv
