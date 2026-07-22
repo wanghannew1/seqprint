@@ -566,8 +566,7 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                 for c, fp in fpf.items():
                     if c >= 7 and fp != ("", "", "") and fp not in seen_fp:
                         seen_fp.add(fp)
-                        # 插入到同级 r3v 第一个"合计"项之前（如"公务员医疗补助"放到"扣款合计"前面）
-                        # 而非简单追加到末尾——避免跨段合计排序失效
+                        # 方法1：按 r3v 组定位——插入到同组"合计"之前，或本组末尾
                         insert_idx = len(canonical_fps)  # 默认追加
                         same_r3v_last = -1
                         for idx, existing_fp in enumerate(canonical_fps):
@@ -577,8 +576,22 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                                     insert_idx = idx
                                     break
                         if insert_idx == len(canonical_fps) and same_r3v_last >= 0:
-                            # 同 r3v 组无"合计"项 → 插到本组末尾（其他组之前）
                             insert_idx = same_r3v_last + 1
+                        # 方法2（兜底）：r3v 组定位失败时，用原始表中左右相邻列定位
+                        # 适用场景："绩效奖金"在参考文件中无同 r3v 组，
+                        # 但左右邻居（基本工资、交通补贴）已在 canonical_fps 中
+                        if insert_idx == len(canonical_fps):
+                            for lc in range(c - 1, 6, -1):
+                                lfp = fpf.get(lc)
+                                if lfp and lfp in canonical_fps:
+                                    insert_idx = canonical_fps.index(lfp) + 1
+                                    break
+                            if insert_idx == len(canonical_fps):
+                                for rc in range(c + 1, max_cols + 1):
+                                    rfp = fpf.get(rc)
+                                    if rfp and rfp in canonical_fps:
+                                        insert_idx = canonical_fps.index(rfp)
+                                        break
                         canonical_fps.insert(insert_idx, fp)
             virtual_cols = 2 + len(canonical_fps)
 
