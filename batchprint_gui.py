@@ -626,31 +626,29 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                 file_col_maps.append(cm)
 
             # ── 读取参考文件的原始表头（用于显示） ──
-            ref_hdr = [{}, {}, {}]
+            # 用 merged_cells.ranges 展开合并区域，避免 openpyxl 读合并格
+            # 非左上角返回 None 的问题。不用传播——传播跨组不稳定。
+            ref_hdr = [[""] * (max_cols + 1) for _ in range(3)]
             try:
+                from openpyxl.utils import range_boundaries
                 ref_wb = openpyxl.load_workbook(items[ref_idx]["path"])
                 ref_ws = ref_wb.active
                 for hi, hr in enumerate([3, 4, 5]):
                     for c in range(1, max_cols + 1):
                         v = ref_ws.cell(row=hr, column=c).value
-                        ref_hdr[hi][c] = str(v).strip() if v is not None else ""
-                # 行3-4向右传播（合并格只有左上角有值，向右填满）
-                # 行3：扣款明细等跨列合并；行4：养老/失业/医疗等子项跨列合并
-                # 行5不传播：都是独立值（单位/个人），无跨列合并
-                # 传播限在同一 r3v 组内——跨组时重置，防止"扣款合计"污染后续列
-                for hi in range(2):
-                    last_val = ""
-                    last_r3v = ""
-                    for c in range(1, max_cols + 1):
-                        v = ref_hdr[hi].get(c, "")
-                        r3v = ref_hdr[0].get(c, "")
-                        if r3v and r3v != last_r3v and last_r3v != "":
-                            last_val = ""
-                        if v:
-                            last_val = v
-                        ref_hdr[hi][c] = last_val
-                        if r3v:
-                            last_r3v = r3v
+                        if v is not None:
+                            ref_hdr[hi][c] = str(v).strip()
+                # 合并格展开：非左上角填左上角值
+                for mr in ref_ws.merged_cells.ranges:
+                    mc, mr0, Mc, Mr = range_boundaries(str(mr))
+                    if Mr < 3 or mr0 > 5:
+                        continue
+                    for hi, hr in enumerate(range(max(mr0, 3), min(Mr, 5) + 1)):
+                        tl = ref_hdr[hr - 3][mc]
+                        if not tl:
+                            continue
+                        for c in range(mc, Mc + 1):
+                            ref_hdr[hr - 3][c] = tl
                 ref_wb.close()
             except Exception:
                 pass
