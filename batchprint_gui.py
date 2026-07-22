@@ -745,11 +745,12 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                     vk = vl
                 vi = vj
 
-            # 纵向合并：行4有值且行5为空 → 行4-5合并
+            # 纵向合并：行4有值且(行5为空 或 行4==行5) → 行4-5合并
+            # 行4==行5情形：单一列头（如"公务员医疗补助""基本工资"）在行4、行5重复出现，应合并
             for vi in range(3, virtual_cols + 1):
                 r4v = tgt_ws.Cells(hdr_start_row + 1, vi).Value
                 r5v = tgt_ws.Cells(hdr_start_row + 2, vi).Value
-                if r4v and not r5v:
+                if r4v and (not r5v or r4v == r5v):
                     already = any((rr, vi) in hmerged for rr in range(hdr_start_row + 1, hdr_end_row + 1))
                     if not already:
                         try:
