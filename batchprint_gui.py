@@ -599,6 +599,7 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             hdr_end_row = r - 1
 
             # ── 动态合并：从源文件的 merged_cells 复制合并规则 ──
+            # hmerged 存已合并的 (virtual_row, virtual_col) 对，避免重复合并同一格
             hmerged = set()
             for src_r1, src_r2, src_c1, src_c2 in src_merges:
                 vc1 = col_map.get(src_c1)
@@ -608,28 +609,34 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                 vr1 = hdr_start_row + (src_r1 - 3)
                 vr2 = hdr_start_row + (src_r2 - 3)
                 if src_c1 == src_c2:
-                    # 单列纵向合并
-                    if vr2 > vr1 and vc1 not in hmerged:
-                        try:
-                            tgt_ws.Range(tgt_ws.Cells(vr1, vc1), tgt_ws.Cells(vr2, vc1)).Merge()
-                            hmerged.add(vc1)
-                        except Exception:
-                            pass
+                    # 单列纵向合并（如工伤险 W4:W5、单位代理费 Z4:Z5）
+                    if vr2 > vr1:
+                        already = any((vr, vc1) in hmerged for vr in range(vr1, vr2 + 1))
+                        if not already:
+                            try:
+                                tgt_ws.Range(tgt_ws.Cells(vr1, vc1), tgt_ws.Cells(vr2, vc1)).Merge()
+                                for vr in range(vr1, vr2 + 1):
+                                    hmerged.add((vr, vc1))
+                            except Exception:
+                                pass
                 elif src_r1 == src_r2:
                     # 同行水平合并（如行4的养老/失业/医疗/公积金各跨2列）
                     mapped = [col_map.get(c) for c in range(src_c1, src_c2 + 1)]
                     if all(m is not None for m in mapped):
                         mn, mx = min(mapped), max(mapped)
-                        if mx - mn + 1 == len(mapped) and mn not in hmerged:
-                            try:
-                                tgt_ws.Range(tgt_ws.Cells(vr1, mn), tgt_ws.Cells(vr1, mx)).Merge()
-                                for vc in range(mn, mx + 1):
-                                    hmerged.add(vc)
-                            except Exception:
-                                pass
+                        if mx - mn + 1 == len(mapped):
+                            already = any((vr1, vc) in hmerged for vc in range(mn, mx + 1))
+                            if not already:
+                                try:
+                                    tgt_ws.Range(tgt_ws.Cells(vr1, mn), tgt_ws.Cells(vr1, mx)).Merge()
+                                    for vc in range(mn, mx + 1):
+                                        hmerged.add((vr1, vc))
+                                except Exception:
+                                    pass
             # 剩余列：行4+行5都为空 → 跨3行合并（覆盖序号/姓名等单值列）
             for vi in range(1, virtual_cols + 1):
-                if vi in hmerged:
+                any_merged = any((r, vi) in hmerged for r in range(hdr_start_row, hdr_end_row + 1))
+                if any_merged:
                     continue
                 val4 = tgt_ws.Cells(hdr_start_row + 1, vi).Value
                 val5 = tgt_ws.Cells(hdr_start_row + 2, vi).Value
