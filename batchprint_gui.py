@@ -487,45 +487,93 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             # ── 写入虚拟表头 ──
             r = 1
 
-            # ── 读取每个源文件的合计行 ──
+            # ── 读取每个源文件的合计行 和 列指纹 ──
             file_totals = []
+            file_fingerprints = []   # list of dict: src_col → (r3v, r4v, r5v)
             for info in items:
                 row_vals = {}
+                fp_dict = {}
                 try:
                     src_rb = openpyxl.load_workbook(info["path"], data_only=True)
-                    src_ws_r = src_rb.active
-                    src_nrows = src_ws_r.max_row or 1
+                    src_ws = src_rb.active
+                    src_nrows = src_ws.max_row or 1
+                    src_ncols = src_ws.max_column or 1
+
+                    # 填充行3-5范围内的合并格（横竖都填）
+                    for mc in list(src_ws.merged_cells.ranges):
+                        mr1, mr2 = mc.min_row, mc.max_row
+                        mc1, mc2 = mc.min_col, mc.max_col
+                        if mr2 >= 3 and mr1 <= 5:
+                            tl = src_ws.cell(row=max(mr1, 3), column=mc1).value
+                            if tl is not None:
+                                tl_s = str(tl).strip()
+                                for rr in range(max(mr1, 3), min(mr2, 5) + 1):
+                                    for cc in range(mc1, mc2 + 1):
+                                        src_ws.cell(row=rr, column=cc).value = tl_s
+
+                    # 生成列指纹 (r3v, r4v, r5v)
+                    for c in range(1, src_ncols + 1):
+                        r3v = src_ws.cell(row=3, column=c).value
+                        r4v = src_ws.cell(row=4, column=c).value
+                        r5v = src_ws.cell(row=5, column=c).value
+                        fp = (str(r3v).strip() if r3v is not None else "",
+                              str(r4v).strip() if r4v is not None else "",
+                              str(r5v).strip() if r5v is not None else "")
+                        fp_dict[c] = fp
+
+                    # 找合计行（严格匹配）
                     for check_r in range(src_nrows, 0, -1):
-                        v = src_ws_r.cell(row=check_r, column=1).value
-                        if v and str(v).strip() == "合计":
-                            for c in range(1, max_cols + 1):
-                                cv = src_ws_r.cell(row=check_r, column=c).value
+                        v = src_ws.cell(row=check_r, column=1).value
+                        if v is not None and str(v).strip() == "合计":
+                            for c in range(1, src_ncols + 1):
+                                cv = src_ws.cell(row=check_r, column=c).value
                                 row_vals[c] = cv
                             break
                     src_rb.close()
                 except Exception:
                     pass
                 file_totals.append(row_vals)
+                file_fingerprints.append(fp_dict)
 
-            # 筛选有数据的列（col 3+，任一源文件有非零数值即保留）
-            active_cols = []
+            # ── 构建规范列指纹序列 ──
+            # 统计每个文件的非空指纹数（col 3+），以最常见的变体为参考
+            variant_counts = []
+            for fpf in file_fingerprints:
+                cnt = sum(1 for c, fp in fpf.items() if c >= 3 and fp != ("", "", ""))
+                variant_counts.append(cnt)
+            count_freq = {}
+            for c in variant_counts:
+                count_freq[c] = count_freq.get(c, 0) + 1
+            most_common_cnt = max(count_freq, key=count_freq.get)
+            ref_idx = next(idx for idx, c in enumerate(variant_counts) if c == most_common_cnt)
+            ref_fp = file_fingerprints[ref_idx]
+
+            # 参考文件的列序（col 3+）→ 去重 + 追加其他变体的独有列
+            canonical_fps = []
+            seen_fp = set()
             for c in range(3, max_cols + 1):
-                has_data = False
-                for ft in file_totals:
-                    v = ft.get(c)
-                    if v is not None:
-                        try:
-                            if float(v) != 0:
-                                has_data = True
-                                break
-                        except (ValueError, TypeError):
-                            if str(v).strip():
-                                has_data = True
-                                break
-                if has_data:
-                    active_cols.append(c)
-            virtual_cols = 2 + len(active_cols)  # 序号 + 结算单元名称 + 数据列
+                fp = ref_fp.get(c, ("", "", ""))
+                if fp != ("", "", "") and fp not in seen_fp:
+                    canonical_fps.append(fp)
+                    seen_fp.add(fp)
+            for fpf in file_fingerprints:
+                for c, fp in fpf.items():
+                    if c >= 3 and fp != ("", "", "") and fp not in seen_fp:
+                        canonical_fps.append(fp)
+                        seen_fp.add(fp)
+            virtual_cols = 2 + len(canonical_fps)
 
+            # ── 每个文件的列映射 {规范位置 → 源列号} ──
+            file_col_maps = []
+            for fpf in file_fingerprints:
+                rev = {fp: src_c for src_c, fp in fpf.items()}
+                col_map = {}
+                for vi, fp in enumerate(canonical_fps):
+                    if fp in rev:
+                        col_map[vi] = rev[fp]
+                file_col_maps.append(col_map)
+
+            # ── 写入表头 ──
             # 第1行：大标题
             title = f"{group_key} 工资表合集"
             if ym_display:
@@ -548,39 +596,8 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = -4152
             r += 1
 
-            # ── 读取第1个源文件的3行复合表头（行3-5） ──
-            hdr_rows = [{}, {}, {}]
-            src_merges = []  # 新增：存储合并单元格信息
-            if items:
-                try:
-                    hdr_wb = openpyxl.load_workbook(items[0]["path"])
-                    hdr_ws = hdr_wb.active
-                    for hi, hr in enumerate([3, 4, 5]):
-                        for c in range(1, max_cols + 1):
-                            v = hdr_ws.cell(row=hr, column=c).value
-                            hdr_rows[hi][c] = str(v).strip() if v is not None else ""
-                    # 新增：读取合并单元格
-                    for mc in hdr_ws.merged_cells.ranges:
-                        r1, r2 = mc.min_row, mc.max_row
-                        c1, c2 = mc.min_col, mc.max_col
-                        if r2 >= 3 and r1 <= 5:  # 只关心行3-5
-                            src_merges.append((r1, r2, c1, c2))
-                    hdr_wb.close()
-                except Exception:
-                    pass
-            # 对 row3：向右传播合并单元格的值（如"扣款明细"跨多列）
-            last_val = ""
-            for c in range(1, max_cols + 1):
-                v = hdr_rows[0].get(c, "")
-                if v:
-                    last_val = v
-                hdr_rows[0][c] = last_val
-
-            # ── 写入3行复合表头 ──
+            # ── 写入3行复合表头（列指纹序） ──
             hdr_start_row = r
-            col_map = {}
-            for vi, oc in enumerate(active_cols, 3):
-                col_map[oc] = vi
             for hi in range(3):
                 val1 = "序号" if hi == 0 else ""
                 tgt_ws.Cells(r, 1).Value = val1
@@ -590,103 +607,131 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                 tgt_ws.Cells(r, 2).Value = val2
                 if hi == 0:
                     tgt_ws.Cells(r, 2).Font.Bold = True
-                for vi, orig_c in enumerate(active_cols, 3):
-                    val = hdr_rows[hi].get(orig_c, "")
-                    tgt_ws.Cells(r, vi).Value = val
+                for vi, fp in enumerate(canonical_fps, 3):
+                    tgt_ws.Cells(r, vi).Value = fp[hi]
                     if hi == 0:
                         tgt_ws.Cells(r, vi).Font.Bold = True
                 r += 1
             hdr_end_row = r - 1
 
-            # ── 动态合并：从源文件的 merged_cells 复制合并规则 ──
-            # hmerged 存已合并的 (virtual_row, virtual_col) 对，避免重复合并同一格
+            # ── 动态合并：从指纹模式重建合并规则 ──
             hmerged = set()
-            for src_r1, src_r2, src_c1, src_c2 in src_merges:
-                vc1 = col_map.get(src_c1)
-                vc2 = col_map.get(src_c2) if src_c2 > src_c1 else vc1
-                if vc1 is None:
-                    continue
-                vr1 = hdr_start_row + (src_r1 - 3)
-                vr2 = hdr_start_row + (src_r2 - 3)
-                if src_c1 == src_c2:
-                    # 单列纵向合并（如工伤险 W4:W5、单位代理费 Z4:Z5）
-                    if vr2 > vr1:
-                        already = any((vr, vc1) in hmerged for vr in range(vr1, vr2 + 1))
-                        if not already:
-                            try:
-                                tgt_ws.Range(tgt_ws.Cells(vr1, vc1), tgt_ws.Cells(vr2, vc1)).Merge()
-                                for vr in range(vr1, vr2 + 1):
-                                    hmerged.add((vr, vc1))
-                            except Exception:
-                                pass
-                elif src_r1 == src_r2:
-                    # 同行水平合并（如行4的养老/失业/医疗/公积金各跨2列）
-                    mapped = [col_map.get(c) for c in range(src_c1, src_c2 + 1)]
-                    if all(m is not None for m in mapped):
-                        mn, mx = min(mapped), max(mapped)
-                        if mx - mn + 1 == len(mapped):
-                            already = any((vr1, vc) in hmerged for vc in range(mn, mx + 1))
-                            if not already:
-                                try:
-                                    tgt_ws.Range(tgt_ws.Cells(vr1, mn), tgt_ws.Cells(vr1, mx)).Merge()
-                                    for vc in range(mn, mx + 1):
-                                        hmerged.add((vr1, vc))
-                                except Exception:
-                                    pass
-            # 剩余列：行4+行5都为空 → 跨3行合并（覆盖序号/姓名等单值列）
+
+            # 1. 行3水平合并：连续相同的 r3v
+            vi = 3
+            while vi <= virtual_cols:
+                fp_r3v = canonical_fps[vi - 3][0]
+                vj = vi + 1
+                while vj <= virtual_cols and canonical_fps[vj - 3][0] == fp_r3v:
+                    vj += 1
+                if vj - 1 > vi:
+                    try:
+                        tgt_ws.Range(tgt_ws.Cells(hdr_start_row, vi),
+                                     tgt_ws.Cells(hdr_start_row, vj - 1)).Merge()
+                        for vc in range(vi, vj):
+                            hmerged.add((hdr_start_row, vc))
+                    except Exception:
+                        pass
+                vi = vj
+
+            # 2. 行4水平合并：在行3同组内，连续相同的 r4v
+            vi = 3
+            while vi <= virtual_cols:
+                fp_r3v = canonical_fps[vi - 3][0]
+                vj = vi + 1
+                while vj <= virtual_cols and canonical_fps[vj - 3][0] == fp_r3v:
+                    vj += 1
+                vk = vi
+                while vk < vj:
+                    fp_r4v = canonical_fps[vk - 3][1]
+                    if not fp_r4v:
+                        vk += 1
+                        continue
+                    vl = vk + 1
+                    while vl < vj and canonical_fps[vl - 3][1] == fp_r4v:
+                        vl += 1
+                    if vl - 1 > vk:
+                        try:
+                            tgt_ws.Range(tgt_ws.Cells(hdr_start_row + 1, vk),
+                                         tgt_ws.Cells(hdr_start_row + 1, vl - 1)).Merge()
+                            for vc in range(vk, vl):
+                                hmerged.add((hdr_start_row + 1, vc))
+                        except Exception:
+                            pass
+                    vk = vl
+                vi = vj
+
+            # 3. 纵向合并：r4v有值且r5v为空 → 行4-行5纵向合并
+            for vi in range(3, virtual_cols + 1):
+                fp = canonical_fps[vi - 3]
+                if fp[1] and not fp[2]:
+                    already = any((rr, vi) in hmerged for rr in range(hdr_start_row + 1, hdr_end_row + 1))
+                    if not already:
+                        try:
+                            tgt_ws.Range(tgt_ws.Cells(hdr_start_row + 1, vi),
+                                         tgt_ws.Cells(hdr_end_row, vi)).Merge()
+                            for rr in range(hdr_start_row + 1, hdr_end_row + 1):
+                                hmerged.add((rr, vi))
+                        except Exception:
+                            pass
+
+            # 4. 剩余列：行4+行5都为空 → 跨3行纵向合并
             for vi in range(1, virtual_cols + 1):
-                any_merged = any((r, vi) in hmerged for r in range(hdr_start_row, hdr_end_row + 1))
+                any_merged = any((rr, vi) in hmerged for rr in range(hdr_start_row, hdr_end_row + 1))
                 if any_merged:
                     continue
-                val4 = tgt_ws.Cells(hdr_start_row + 1, vi).Value
-                val5 = tgt_ws.Cells(hdr_start_row + 2, vi).Value
-                if not val4 and not val5:
+                if vi >= 3:
+                    fp = canonical_fps[vi - 3]
+                    if not fp[1] and not fp[2]:
+                        tgt_ws.Range(tgt_ws.Cells(hdr_start_row, vi),
+                                     tgt_ws.Cells(hdr_end_row, vi)).Merge()
+                else:
                     tgt_ws.Range(tgt_ws.Cells(hdr_start_row, vi),
                                  tgt_ws.Cells(hdr_end_row, vi)).Merge()
-            # 记录数据区域起始行
+
             data_start_row = r
 
-            # 每个源文件一行
+            # ── 写入数据行 ──
             total_accum = {}
             for idx, (info, ft) in enumerate(zip(items, file_totals), 1):
                 tgt_ws.Cells(r, 1).Value = idx
                 tgt_ws.Cells(r, 2).Value = info["unit_name"]
-                for vi, c in enumerate(active_cols, 3):
-                    cv = ft.get(c)
-                    if cv is not None:
-                        try:
-                            val = float(cv)
-                            tgt_ws.Cells(r, vi).Value = round(val, 2)
-                            tgt_ws.Cells(r, vi).NumberFormat = "0.00"
-                            total_accum[c] = total_accum.get(c, 0) + val
-                        except (ValueError, TypeError):
-                            tgt_ws.Cells(r, vi).Value = cv
+                col_map = file_col_maps[idx - 1]
+                for vi, fp in enumerate(canonical_fps):
+                    src_c = col_map.get(vi)
+                    if src_c is not None and src_c in ft:
+                        cv = ft[src_c]
+                        if cv is not None:
+                            try:
+                                val = float(cv)
+                                tgt_ws.Cells(r, vi + 3).Value = round(val, 2)
+                                tgt_ws.Cells(r, vi + 3).NumberFormat = "0.00"
+                                total_accum[vi] = total_accum.get(vi, 0) + val
+                            except (ValueError, TypeError):
+                                tgt_ws.Cells(r, vi + 3).Value = cv
                 r += 1
 
             # 合计行
             tgt_ws.Cells(r, 1).Value = "合计"
             tgt_ws.Cells(r, 1).Font.Bold = True
-            for vi, c in enumerate(active_cols, 3):
-                if c in total_accum:
-                    tgt_ws.Cells(r, vi).Value = round(total_accum[c], 2)
-                    tgt_ws.Cells(r, vi).NumberFormat = "0.00"
-                tgt_ws.Cells(r, vi).Font.Bold = True
+            for vi, fp in enumerate(canonical_fps):
+                if vi in total_accum:
+                    tgt_ws.Cells(r, vi + 3).Value = round(total_accum[vi], 2)
+                    tgt_ws.Cells(r, vi + 3).NumberFormat = "0.00"
+                tgt_ws.Cells(r, vi + 3).Font.Bold = True
             tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, virtual_cols)).Interior.Color = 0xE8F0FE
             virtual_end_row = r
 
             # ── 格式化虚拟表区域 ──
-            # 列宽
             tgt_ws.Columns(1).ColumnWidth = 5     # 序号
             tgt_ws.Columns(2).ColumnWidth = 22    # 结算单元名称
             for vi in range(3, virtual_cols + 1):
                 tgt_ws.Columns(vi).ColumnWidth = 12
-            # 边框 + 换行：表头行起至合计行
             brd = tgt_ws.Range(tgt_ws.Cells(data_start_row - 3, 1),
                                tgt_ws.Cells(virtual_end_row, virtual_cols))
             brd.Borders.LineStyle = 1  # xlContinuous
             brd.Borders.Weight = 2     # xlThin
             brd.WrapText = True
-            # 结算单元名列左对齐（默认居中）
             tgt_ws.Range(tgt_ws.Cells(data_start_row - 3, 2),
                          tgt_ws.Cells(virtual_end_row, 2)).HorizontalAlignment = 1  # xlLeft
             r += 2
