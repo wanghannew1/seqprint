@@ -447,6 +447,9 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
     groups = defaultdict(list)
     for info in file_infos:
         key = info["unit_name"] if info["excluded"] else info["big_org"]
+        if not key or not key.strip():
+            # 单位名为空时用文件名兜底（去掉后缀）
+            key = os.path.splitext(os.path.basename(info["fname"]))[0]
         groups[key].append(info)
 
     if progress_callback:
@@ -484,7 +487,9 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             # ── 创建目标 workbook ──
             tgt_wb = app.Workbooks.Add()
             tgt_ws = tgt_wb.ActiveSheet
-            tgt_ws.Name = group_key
+            # COM 限制 sheet 名 ≤31 字符，不含 :\/?*[]
+            safe_name = re.sub(r'[\\/?*\[\]:]', '', group_key)[:31] or "未命名"
+            tgt_ws.Name = safe_name
 
             # ── 写入虚拟表头 ──
             r = 1
@@ -1011,6 +1016,15 @@ def merge_bank_files_advanced(bank_dir, output_dir,
         excluded = is_excluded(unit_name)
         classified.append((yearmon, bank, unit_name, fname, big_org, excluded))
 
+    def _sanitize_sheet_name(name):
+        """确保 sheet 名符合 COM 限制：≤31字符，不含 :\\/?*[]，不为空"""
+        if not name or not name.strip():
+            return "未命名"
+        name = re.sub(r'[\\/?*\[\]:]', '', name.strip())
+        if not name:
+            return "未命名"
+        return name[:31]
+
     groups = defaultdict(list)
     for rec in classified:
         yearmon, bank, unit_name, fname, big_org, excluded = rec
@@ -1018,6 +1032,10 @@ def merge_bank_files_advanced(bank_dir, output_dir,
             group_key = big_org
         else:
             group_key = unit_name
+        if not group_key or not group_key.strip():
+            # 单位名为空时用文件名兜底
+            group_key = os.path.splitext(os.path.basename(fname))[0]
+        group_key = _sanitize_sheet_name(group_key)
         groups[group_key].append(rec)
 
     _script_dir = os.path.dirname(os.path.abspath(__file__))
