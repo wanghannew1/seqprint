@@ -668,15 +668,15 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = -4108
             r += 1
 
-            # 第2行：单位名称（左）+ 打印时间（右）
+            # 第2行：单位名称（左）+ 统计时间（右）
             from datetime import datetime
+            right_start = virtual_cols - 3 if virtual_cols > 6 else 4
             tgt_ws.Cells(r, 1).Value = f"单位名称：{group_key}"
-            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, virtual_cols)).Merge()
-            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = 1
-            time_col = virtual_cols if virtual_cols <= 3 else 4
-            tgt_ws.Cells(r, time_col).Value = f"打印时间：{datetime.now().strftime('%Y年%m月%d日')}"
-            tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, virtual_cols)).Merge()
-            tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = -4152
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, right_start - 1)).Merge()
+            tgt_ws.Range(tgt_ws.Cells(r, 1), tgt_ws.Cells(r, right_start - 1)).HorizontalAlignment = 1
+            tgt_ws.Cells(r, right_start).Value = f"统计时间：{datetime.now().strftime('%Y年%m月%d日')}"
+            tgt_ws.Range(tgt_ws.Cells(r, right_start), tgt_ws.Cells(r, virtual_cols)).Merge()
+            tgt_ws.Range(tgt_ws.Cells(r, right_start), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = -4152
             r += 1
 
             # ── 写入3行复合表头 ──
@@ -695,6 +695,10 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                         tgt_ws.Cells(r, vi).Font.Bold = True
                 r += 1
             hdr_end_row = r - 1
+
+            # 表头居中对齐
+            for hr in range(hdr_start_row, hdr_end_row + 1):
+                tgt_ws.Range(tgt_ws.Cells(hr, 1), tgt_ws.Cells(hr, virtual_cols)).HorizontalAlignment = -4108
 
             # ── 合并单元格：按实际写入的内容判定 ──
             hmerged = set()
