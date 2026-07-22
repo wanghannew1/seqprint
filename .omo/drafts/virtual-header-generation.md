@@ -99,27 +99,31 @@ for fpf in file_fingerprints:
 ### 4.1 读取参考文件的原始表头
 
 ```python
-ref_hdr = [{}, {}, {}]   # ref_hdr[0]=行3, ref_hdr[1]=行4, ref_hdr[2]=行5
+from openpyxl.utils import range_boundaries
+
+ref_hdr = [[""] * (max_cols + 1) for _ in range(3)]
+
+# 先写原始值
 for hi, hr in enumerate([3, 4, 5]):
     for c in range(1, max_cols + 1):
         v = ref_ws.cell(row=hr, column=c).value
-        ref_hdr[hi][c] = str(v).strip() if v else ""
+        if v is not None:
+            ref_hdr[hi][c] = str(v).strip()
 
-# 行3-4向右传播：合并格只有左上角有值，向右填满
-# 行3：扣款明细等跨列合并；行4：养老/失业/医疗等子项跨列合并
-# 行5不传播：都是独立值（单位/个人），无跨列合并
-for hi in range(2):
-    last_val = ""
-    for c in range(1, max_cols + 1):
-        v = ref_hdr[hi].get(c, "")
-        if v:
-            last_val = v
-        ref_hdr[hi][c] = last_val
+# 合并格展开：非左上角填左上角值
+for mr in ref_ws.merged_cells.ranges:
+    mc, mr0, Mc, Mr = range_boundaries(str(mr))
+    if Mr < 3 or mr0 > 5:
+        continue
+    for hi, hr in enumerate(range(max(mr0, 3), min(Mr, 5) + 1)):
+        tl = ref_hdr[hr - 3][mc]
+        if not tl:
+            continue
+        for c in range(mc, Mc + 1):
+            ref_hdr[hr - 3][c] = tl
 ```
 
-> ⚠️ **行4传播的必要性**：参考文件的行4有横向合并（如"养老"跨C17-C18），openpyxl 读合并格只有左上角 C17 有值"养老"，C18 为 None → ""。若不传播，`ref_hdr[1][18]` = ""，导致 `display_hdr[("扣款明细", "养老", "个人")]` 的行4显示值为空——写表头时该格空白，合并逻辑 `if not r4v: continue` 跳过该列，养老/失业/医疗等子项无法正确合并。
->
-> ⚠️ **行5不可传播**：行5都是独立子项值（单位、个人），无跨列合并。传播行5会导致前一列的行5值（如"个人"）污染后续列。提交 `ea88031` 曾误加了行5传播，`311ff85` 修正。
+> ⚠️ **为什么用 merged_cells.ranges 展开而不用传播**：openpyxl 读合并格的非左上角返回 None。早期的做法（行3-4向右传播）填补这些空位，但传播会跨越 r3v 组边界——"扣款合计"的行4值被传播到属于不同 r3v 组的"个人所得税"列。用 `merged_cells.ranges` 展开直接从源文件读取合并范围，准确还原每个单元格的值，不会跨组污染。提交 `203de90` 替换。
 
 
 
@@ -273,7 +277,7 @@ for vi, fp in enumerate(canonical_fps):
 | 构建指纹 | 线 491-539 | 每个源文件独立提取 `fp_dict` |
 | 构建 canonical_fps | 线 541-580 | 参考文件 + 变体独有指纹位置感知插入 |
 | 过滤空列 | 线 593-616 | 全零合计列从 `canonical_fps` 移除 |
-| 构建 display_hdr | 线 628-657 | 参考文件原始值 + 变体回退到fp |
+| 构建 display_hdr | 线 628-653 | merged_cells.ranges 展开 + 变体回退到fp |
 | 写表头 | 线 659-697 | 大标题 → 信息行 → 3层复合表头 |
 | 行4水平合并 | 线 706-742 | 在行3原始值同组内扫描行4连续相同值（先于行3合并） |
 | 纵向合并 | 线 744-776 | 情形A/B/C 三种纵向合并 |
@@ -302,7 +306,9 @@ for vi, fp in enumerate(canonical_fps):
 
 **第一层原因（display_hdr 空值）**：参考文件的行4有横向合并（如"养老"跨C17-C18），但 openpyxl 读取合并格时只有左上角有值。`ref_hdr[1][18]` 为 ""，导致对应指纹的 `display_hdr` 行4值为空，写表头时该格空白，合并逻辑 `if not r4v: continue` 跳过。
 
-修复：行3-4向右传播。提交 `ea88031`。
+早期修复：行3-4向右传播（`ea88031`）。但传播跨 r3v 组不稳定——"扣款合计"会污染"个人所得税"列。
+
+最终修复：用 `merged_cells.ranges` 展开合并区域，直接在读取时还原所有单元格值。提交 `203de90`。
 
 **第二层原因（合并顺序错误）**：即使写入值正确，行4合并也在行3合并之后执行。WPS COM 读取已合并格的非左上角返回 Empty。行3合并"扣款明细"覆盖 C9-C19 后，C10-C19 的行3变成 Empty → 行4按行3分组时每列自成一组 → 无行4水平合并。
 
