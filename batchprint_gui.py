@@ -577,6 +577,72 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                         col_map[vi] = rev[fp]
                 file_col_maps.append(col_map)
 
+            # ── 过滤合计行全空的列 ──
+            active_fps = []
+            for vi, fp in enumerate(canonical_fps):
+                has_data = False
+                for ft, cm in zip(file_totals, file_col_maps):
+                    src_c = cm.get(vi)
+                    if src_c is not None and src_c in ft:
+                        v = ft[src_c]
+                        if v is not None:
+                            try:
+                                if float(v) != 0:
+                                    has_data = True
+                                    break
+                            except (ValueError, TypeError):
+                                if str(v).strip():
+                                    has_data = True
+                                    break
+                if has_data:
+                    active_fps.append(fp)
+                # 确保至少保留1列（防止全部为空）
+            if not active_fps:
+                active_fps = canonical_fps[:1]
+            canonical_fps = active_fps
+            virtual_cols = 2 + len(canonical_fps)
+
+            # 重新映射（过滤后位置变了）
+            file_col_maps = []
+            for fpf in file_fingerprints:
+                rev = {fp: sc for sc, fp in fpf.items()}
+                cm = {}
+                for vi, fp in enumerate(canonical_fps):
+                    if fp in rev:
+                        cm[vi] = rev[fp]
+                file_col_maps.append(cm)
+
+            # ── 读取参考文件的原始表头（用于显示） ──
+            ref_hdr = [{}, {}, {}]
+            try:
+                ref_wb = openpyxl.load_workbook(items[ref_idx]["path"])
+                ref_ws = ref_wb.active
+                for hi, hr in enumerate([3, 4, 5]):
+                    for c in range(1, max_cols + 1):
+                        v = ref_ws.cell(row=hr, column=c).value
+                        ref_hdr[hi][c] = str(v).strip() if v is not None else ""
+                # 行3向右传播（处理扣款明细等跨列合并）
+                last_val = ""
+                for c in range(1, max_cols + 1):
+                    v = ref_hdr[0].get(c, "")
+                    if v:
+                        last_val = v
+                    ref_hdr[0][c] = last_val
+                ref_wb.close()
+            except Exception:
+                pass
+
+            # 规范指纹 → (r3显示值, r4显示值, r5显示值)
+            display_hdr = {}
+            for c in range(7, max_cols + 1):
+                fp = ref_fp.get(c)
+                if fp and fp != ("", "", ""):
+                    display_hdr[fp] = (
+                        ref_hdr[0].get(c, ""),
+                        ref_hdr[1].get(c, ""),
+                        ref_hdr[2].get(c, ""),
+                    )
+
             # ── 写入表头 ──
             # 第1行：大标题
             title = f"{group_key} 工资表合集"
@@ -600,33 +666,34 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             tgt_ws.Range(tgt_ws.Cells(r, time_col), tgt_ws.Cells(r, virtual_cols)).HorizontalAlignment = -4152
             r += 1
 
-            # ── 写入3行复合表头（列指纹序） ──
+            # ── 写入3行复合表头 ──
             hdr_start_row = r
             for hi in range(3):
-                val1 = "序号" if hi == 0 else ""
-                tgt_ws.Cells(r, 1).Value = val1
+                tgt_ws.Cells(r, 1).Value = "序号" if hi == 0 else ""
                 if hi == 0:
                     tgt_ws.Cells(r, 1).Font.Bold = True
-                val2 = "结算单元名称" if hi == 0 else ""
-                tgt_ws.Cells(r, 2).Value = val2
+                tgt_ws.Cells(r, 2).Value = "结算单元名称" if hi == 0 else ""
                 if hi == 0:
                     tgt_ws.Cells(r, 2).Font.Bold = True
                 for vi, fp in enumerate(canonical_fps, 3):
-                    tgt_ws.Cells(r, vi).Value = fp[hi]
-                    if hi == 0:
+                    dv = display_hdr.get(fp, fp)[hi]
+                    tgt_ws.Cells(r, vi).Value = dv
+                    if hi == 0 and dv:
                         tgt_ws.Cells(r, vi).Font.Bold = True
                 r += 1
             hdr_end_row = r - 1
 
-            # ── 动态合并：从指纹模式重建合并规则 ──
+            # ── 合并单元格：按实际写入的内容判定 ──
             hmerged = set()
-
-            # 1. 行3水平合并：连续相同的 r3v
+            # 行3水平合并：连续相同值
             vi = 3
             while vi <= virtual_cols:
-                fp_r3v = canonical_fps[vi - 3][0]
+                r3v = tgt_ws.Cells(hdr_start_row, vi).Value
+                if not r3v:
+                    vi += 1
+                    continue
                 vj = vi + 1
-                while vj <= virtual_cols and canonical_fps[vj - 3][0] == fp_r3v:
+                while vj <= virtual_cols and tgt_ws.Cells(hdr_start_row, vj).Value == r3v:
                     vj += 1
                 if vj - 1 > vi:
                     try:
@@ -638,21 +705,21 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                         pass
                 vi = vj
 
-            # 2. 行4水平合并：在行3同组内，连续相同的 r4v
+            # 行4水平合并：在行3同组内，连续相同值
             vi = 3
             while vi <= virtual_cols:
-                fp_r3v = canonical_fps[vi - 3][0]
+                r3v = tgt_ws.Cells(hdr_start_row, vi).Value
                 vj = vi + 1
-                while vj <= virtual_cols and canonical_fps[vj - 3][0] == fp_r3v:
+                while vj <= virtual_cols and tgt_ws.Cells(hdr_start_row, vj).Value == r3v:
                     vj += 1
                 vk = vi
                 while vk < vj:
-                    fp_r4v = canonical_fps[vk - 3][1]
-                    if not fp_r4v:
+                    r4v = tgt_ws.Cells(hdr_start_row + 1, vk).Value
+                    if not r4v:
                         vk += 1
                         continue
                     vl = vk + 1
-                    while vl < vj and canonical_fps[vl - 3][1] == fp_r4v:
+                    while vl < vj and tgt_ws.Cells(hdr_start_row + 1, vl).Value == r4v:
                         vl += 1
                     if vl - 1 > vk:
                         try:
@@ -665,10 +732,11 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                     vk = vl
                 vi = vj
 
-            # 3. 纵向合并：r4v有值且r5v为空 → 行4-行5纵向合并
+            # 纵向合并：行4有值且行5为空 → 行4-5合并
             for vi in range(3, virtual_cols + 1):
-                fp = canonical_fps[vi - 3]
-                if fp[1] and not fp[2]:
+                r4v = tgt_ws.Cells(hdr_start_row + 1, vi).Value
+                r5v = tgt_ws.Cells(hdr_start_row + 2, vi).Value
+                if r4v and not r5v:
                     already = any((rr, vi) in hmerged for rr in range(hdr_start_row + 1, hdr_end_row + 1))
                     if not already:
                         try:
@@ -679,20 +747,20 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                         except Exception:
                             pass
 
-            # 4. 剩余列：行4+行5都为空 → 跨3行纵向合并
+            # 其余列：行4+行5都为空 → 跨3行合并
             for vi in range(1, virtual_cols + 1):
-                any_merged = any((rr, vi) in hmerged for rr in range(hdr_start_row, hdr_end_row + 1))
-                if any_merged:
+                if any((rr, vi) in hmerged for rr in range(hdr_start_row, hdr_end_row + 1)):
                     continue
-                if vi >= 3:
-                    fp = canonical_fps[vi - 3]
-                    if not fp[1] and not fp[2]:
+                r4v = tgt_ws.Cells(hdr_start_row + 1, vi).Value
+                r5v = tgt_ws.Cells(hdr_start_row + 2, vi).Value
+                if not r4v and not r5v:
+                    try:
                         tgt_ws.Range(tgt_ws.Cells(hdr_start_row, vi),
                                      tgt_ws.Cells(hdr_end_row, vi)).Merge()
-                else:
-                    tgt_ws.Range(tgt_ws.Cells(hdr_start_row, vi),
-                                 tgt_ws.Cells(hdr_end_row, vi)).Merge()
+                    except Exception:
+                        pass
 
+            # 数据区域起始行
             data_start_row = r
 
             # ── 写入数据行 ──
