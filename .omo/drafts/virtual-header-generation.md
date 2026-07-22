@@ -105,14 +105,20 @@ for hi, hr in enumerate([3, 4, 5]):
         v = ref_ws.cell(row=hr, column=c).value
         ref_hdr[hi][c] = str(v).strip() if v else ""
 
-# 行3向右传播：解决 openpyxl 读取合并格只有左上角有值的问题
-last_val = ""
-for c in range(1, max_cols + 1):
-    v = ref_hdr[0].get(c, "")
-    if v:
-        last_val = v
-    ref_hdr[0][c] = last_val
+# 行3-5向右传播：合并格只有左上角有值，向右填满
+# 行3：扣款明细等跨列合并；行4：养老/失业/医疗等子项合并
+for hi in range(3):
+    last_val = ""
+    for c in range(1, max_cols + 1):
+        v = ref_hdr[hi].get(c, "")
+        if v:
+            last_val = v
+        ref_hdr[hi][c] = last_val
 ```
+
+> ⚠️ **行4传播的必要性**：参考文件的行4有横向合并（如"养老"跨C17-C18），openpyxl 读合并格只有左上角 C17 有值"养老"，C18 为 None → ""。若不传播，`ref_hdr[1][18]` = ""，导致 `display_hdr[("扣款明细", "养老", "个人")]` 的行4显示值为空——写表头时该格空白，合并逻辑 `if not r4v: continue` 跳过该列，养老/失业/医疗等子项无法正确合并。
+>
+> 之前只传播了行3（`ref_hdr[0]`），行4遗漏了。提交 `ea88031` 修复。
 
 ### 4.2 构建 display_hdr 映射
 
@@ -127,6 +133,8 @@ for c in range(7, max_cols + 1):
     if fp and fp != ("", "", ""):
         display_hdr[fp] = (ref_hdr[0][c], ref_hdr[1][c], ref_hdr[2][c])
 ```
+
+**变体独有列的回退**：变体文件的独有指纹（如公务员医疗补助）不在参考文件中，`display_hdr` 中无对应项。写表头时 `display_hdr.get(fp, fp)[hi]` 回退到指纹元组自身的值——指纹中的 r4v/r5v 就是源文件中的列头文字，正确可用。
 
 **关键设计**：`display_hdr` 只构建参考文件中**已存在**的指纹。变体独有指纹（如公务员医疗补助、大病险等）不在参考文件中，因此在 `display_hdr` 中不存在。写表头时通过 `display_hdr.get(fp, fp)` 回退到指纹元组自身的值——这也是正确的，因为指纹中的 r4v/r5v 就是源文件中的列头文字。
 
@@ -282,3 +290,9 @@ for vi, fp in enumerate(canonical_fps):
 ### Q: 公务员医疗补助为什么会在扣款合计后面？
 
 见 `fix-merge-column-mapping.md` 计划。原因为变体独有指纹追加到 `canonical_fps` 末尾，而各组 r3v 在规范序列中非连续（被个人所得税、实发工资等穿插），导致组内重排无法跨段修复。修复方式：位置感知插入——变体指纹插入到同 r3v 组第一个"合计"项之前。
+
+### Q: 为什么行4的子项合并（养老、失业等）没有生效？
+
+参考文件的行4有横向合并（如"养老"跨C17-C18），但 openpyxl 读取合并格时只有左上角有值。`ref_hdr[1][18]` 为 ""，导致对应指纹的 `display_hdr` 行4值为空，写表头时该格空白，合并逻辑 `if not r4v: continue` 跳过。
+
+**修复**：行3-5全部向右传播（之前只传播了行3）。提交 `ea88031`。
