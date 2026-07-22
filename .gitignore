@@ -1,6 +1,8 @@
 venv/
 __pycache__/
 *.pyc
-.omo/
+.omo/evidence/
+.omo/run-continuation/
+.omo/boulder.json
 .DS_Store
 6月银行导入模板分类清单.xlsx
