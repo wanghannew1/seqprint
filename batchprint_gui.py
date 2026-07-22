@@ -637,13 +637,20 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                 # 行3-4向右传播（合并格只有左上角有值，向右填满）
                 # 行3：扣款明细等跨列合并；行4：养老/失业/医疗等子项跨列合并
                 # 行5不传播：都是独立值（单位/个人），无跨列合并
+                # 传播限在同一 r3v 组内——跨组时重置，防止"扣款合计"污染后续列
                 for hi in range(2):
                     last_val = ""
+                    last_r3v = ""
                     for c in range(1, max_cols + 1):
                         v = ref_hdr[hi].get(c, "")
+                        r3v = ref_hdr[0].get(c, "")
+                        if r3v and r3v != last_r3v and last_r3v != "":
+                            last_val = ""
                         if v:
                             last_val = v
                         ref_hdr[hi][c] = last_val
+                        if r3v:
+                            last_r3v = r3v
                 ref_wb.close()
             except Exception:
                 pass
