@@ -634,13 +634,15 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                     for c in range(1, max_cols + 1):
                         v = ref_ws.cell(row=hr, column=c).value
                         ref_hdr[hi][c] = str(v).strip() if v is not None else ""
-                # 行3向右传播（处理扣款明细等跨列合并）
-                last_val = ""
-                for c in range(1, max_cols + 1):
-                    v = ref_hdr[0].get(c, "")
-                    if v:
-                        last_val = v
-                    ref_hdr[0][c] = last_val
+                # 行3-5向右传播（合并格只有左上角有值，向右填满）
+                # 行3：扣款明细等跨列合并；行4：养老/失业/医疗等子项合并
+                for hi in range(3):
+                    last_val = ""
+                    for c in range(1, max_cols + 1):
+                        v = ref_hdr[hi].get(c, "")
+                        if v:
+                            last_val = v
+                        ref_hdr[hi][c] = last_val
                 ref_wb.close()
             except Exception:
                 pass
