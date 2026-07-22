@@ -634,9 +634,10 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                     for c in range(1, max_cols + 1):
                         v = ref_ws.cell(row=hr, column=c).value
                         ref_hdr[hi][c] = str(v).strip() if v is not None else ""
-                # 行3-5向右传播（合并格只有左上角有值，向右填满）
-                # 行3：扣款明细等跨列合并；行4：养老/失业/医疗等子项合并
-                for hi in range(3):
+                # 行3-4向右传播（合并格只有左上角有值，向右填满）
+                # 行3：扣款明细等跨列合并；行4：养老/失业/医疗等子项跨列合并
+                # 行5不传播：都是独立值（单位/个人），无跨列合并
+                for hi in range(2):
                     last_val = ""
                     for c in range(1, max_cols + 1):
                         v = ref_hdr[hi].get(c, "")
@@ -704,25 +705,8 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
 
             # ── 合并单元格：按实际写入的内容判定 ──
             hmerged = set()
-            # 行3水平合并：连续相同值
-            vi = 3
-            while vi <= virtual_cols:
-                r3v = tgt_ws.Cells(hdr_start_row, vi).Value
-                if not r3v:
-                    vi += 1
-                    continue
-                vj = vi + 1
-                while vj <= virtual_cols and tgt_ws.Cells(hdr_start_row, vj).Value == r3v:
-                    vj += 1
-                if vj - 1 > vi:
-                    try:
-                        tgt_ws.Range(tgt_ws.Cells(hdr_start_row, vi),
-                                     tgt_ws.Cells(hdr_start_row, vj - 1)).Merge()
-                        for vc in range(vi, vj):
-                            hmerged.add((hdr_start_row, vc))
-                    except Exception:
-                        pass
-                vi = vj
+            # 注意：行4合并在行3合并之前——行3合并后 WPS COM 读合并
+            # 格非左上角返回 Empty，导致行4按行3分组时大量列被跳过
 
             # 行4水平合并：在行3同组内，连续相同值
             vi = 3
@@ -793,6 +777,24 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                                      tgt_ws.Cells(hdr_end_row, vi)).Merge()
                     except Exception:
                         pass
+
+            # 行3水平合并：放在行4/纵向合并之后——COM读已合并格的非左上角返回Empty
+            vi = 3
+            while vi <= virtual_cols:
+                r3v = tgt_ws.Cells(hdr_start_row, vi).Value
+                if not r3v:
+                    vi += 1
+                    continue
+                vj = vi + 1
+                while vj <= virtual_cols and tgt_ws.Cells(hdr_start_row, vj).Value == r3v:
+                    vj += 1
+                if vj - 1 > vi:
+                    try:
+                        tgt_ws.Range(tgt_ws.Cells(hdr_start_row, vi),
+                                     tgt_ws.Cells(hdr_start_row, vj - 1)).Merge()
+                    except Exception:
+                        pass
+                vi = vj
 
             # 数据区域起始行
             data_start_row = r
