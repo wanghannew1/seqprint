@@ -357,6 +357,8 @@ def get_big_org(unit_name):
         if big_org:
             return big_org, unit_name
         return unit_name, unit_name
+    # 无匹配规则时回退到源单位名
+    return unit_name, unit_name
 
 
 # ── 工资表简单合并（按大单位堆叠） ──────────────────────────
