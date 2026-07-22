@@ -661,9 +661,9 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                 fp = ref_fp.get(c)
                 if fp and fp != ("", "", ""):
                     display_hdr[fp] = (
-                        ref_hdr[0].get(c, ""),
-                        ref_hdr[1].get(c, ""),
-                        ref_hdr[2].get(c, ""),
+                        ref_hdr[0][c],
+                        ref_hdr[1][c],
+                        ref_hdr[2][c],
                     )
 
             # ── 写入表头 ──
