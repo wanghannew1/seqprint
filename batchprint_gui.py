@@ -4047,7 +4047,7 @@ class BatchPrintGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("批量打印程序")
+        self.root.title("工资表报盘合并工具")
         self.root.geometry("800x600")
         self.root.minsize(700, 500)
 
@@ -4055,6 +4055,7 @@ class BatchPrintGUI:
         self.payroll_dir = None
         self.bank_output_dir = None
         self.payroll_output_dir = None
+        self._last_merged_payroll_dir = None
 
         self._build_ui()
 
@@ -4064,7 +4065,7 @@ class BatchPrintGUI:
         # 标题
         title = tk.Label(
             self.root,
-            text="批量银行报盘合并与工资表打印工具",
+            text="工资表报盘合并工具",
             font=("微软雅黑", 14, "bold"),
             pady=12,
         )
@@ -4095,106 +4096,12 @@ class BatchPrintGUI:
         btn_box = tk.Frame(self.root, padx=12, pady=10)
         btn_box.pack(fill=tk.X)
 
-        # 第一行：主要操作 + 验证规则
-        row1 = tk.Frame(btn_box)
-        row1.pack(fill=tk.X, pady=(0, 4))
-
-        self.run_all_btn = tk.Button(
-            row1,
-            text="执行全部并打印",
-            command=self.run_all_and_print,
-            bg="#4a90d9",
-            fg="white",
-            font=("微软雅黑", 11, "bold"),
-            padx=20,
-            pady=4,
-        )
-        self.run_all_btn.pack(side=tk.LEFT, padx=(0, 10))
-
-        self.merge_only_btn = tk.Button(
-            row1,
-            text="仅合并不打印",
-            command=self.run_merge_only,
-            bg="#6abf69",
-            fg="white",
-            font=("微软雅黑", 11, "bold"),
-            padx=20,
-            pady=4,
-        )
-        self.merge_only_btn.pack(side=tk.LEFT)
-
-        # 分隔 + 验证规则
-        sep_left = tk.Frame(row1, width=2, bd=1, relief=tk.SUNKEN, height=30)
-        sep_left.pack(side=tk.LEFT, padx=10)
-
-        tk.Button(
-            row1,
-            text="验证规则",
-            command=self._open_validation_config,
-            bg="#95a5a6",
-            fg="white",
-            font=("微软雅黑", 10, "bold"),
-            padx=12,
-            pady=4,
-        ).pack(side=tk.LEFT)
-
-        tk.Button(
-            row1,
-            text="汇总设置",
-            command=self._open_summary_config,
-            bg="#95a5a6",
-            fg="white",
-            font=("微软雅黑", 10, "bold"),
-            padx=12,
-            pady=4,
-        ).pack(side=tk.LEFT, padx=(6, 0))
-
-        # 第二行：工资表合并操作
-        row2 = tk.Frame(btn_box)
-        row2.pack(fill=tk.X)
-
-        self.merge_payroll_btn = tk.Button(
-            row2,
-            text="合并工资表及报盘并打印",
-            command=self.run_merge_payroll_and_print,
-            bg="#e67e22",
-            fg="white",
-            font=("微软雅黑", 11, "bold"),
-            padx=16,
-            pady=4,
-        )
-        self.merge_payroll_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self.merge_payroll_no_print_btn = tk.Button(
-            row2,
-            text="合并工资表及报盘不打印",
-            command=self.run_merge_payroll_only,
-            bg="#9b59b6",
-            fg="white",
-            font=("微软雅黑", 11, "bold"),
-            padx=16,
-            pady=4,
-        )
-        self.merge_payroll_no_print_btn.pack(side=tk.LEFT)
-
-        # 第三行：报盘格式转换
-        row3 = tk.Frame(btn_box)
-        row3.pack(fill=tk.X, pady=(4, 0))
-
-        self.bank_convert_btn = tk.Button(
-            row3,
-            text="报盘格式转换",
-            command=self.run_bank_convert,
-            bg="#8e44ad",
-            fg="white",
-            font=("微软雅黑", 11, "bold"),
-            padx=16,
-            pady=4,
-        )
-        self.bank_convert_btn.pack(side=tk.LEFT, padx=(0, 6))
+        # RowA：高级合并报盘 | 合并工资表（简单堆叠） | 打印工资表
+        rowA = tk.Frame(btn_box)
+        rowA.pack(fill=tk.X, pady=(0, 6))
 
         self.adv_merge_btn = tk.Button(
-            row3,
+            rowA,
             text="高级合并报盘",
             command=self.run_advanced_merge,
             bg="#2c3e50",
@@ -4203,14 +4110,10 @@ class BatchPrintGUI:
             padx=16,
             pady=4,
         )
-        self.adv_merge_btn.pack(side=tk.LEFT, padx=(6, 0))
-
-        # 第四行：工资表简单合并
-        row4 = tk.Frame(btn_box)
-        row4.pack(fill=tk.X, pady=(4, 0))
+        self.adv_merge_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         self.merge_payroll_simple_btn = tk.Button(
-            row4,
+            rowA,
             text="合并工资表（简单堆叠）",
             command=self.run_merge_payrolls_simple,
             bg="#1a6b3c",
@@ -4219,7 +4122,45 @@ class BatchPrintGUI:
             padx=16,
             pady=4,
         )
-        self.merge_payroll_simple_btn.pack(side=tk.LEFT)
+        self.merge_payroll_simple_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.print_payroll_btn = tk.Button(
+            rowA,
+            text="打印工资表",
+            command=self.run_print_payroll_dir,
+            bg="#e67e22",
+            fg="white",
+            font=("微软雅黑", 11, "bold"),
+            padx=16,
+            pady=4,
+        )
+        self.print_payroll_btn.pack(side=tk.LEFT)
+
+        # RowB：验证规则 | 汇总设置
+        rowB = tk.Frame(btn_box)
+        rowB.pack(fill=tk.X, pady=(0, 4))
+
+        tk.Button(
+            rowB,
+            text="验证规则",
+            command=self._open_validation_config,
+            bg="#95a5a6",
+            fg="white",
+            font=("微软雅黑", 10, "bold"),
+            padx=12,
+            pady=4,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+
+        tk.Button(
+            rowB,
+            text="汇总设置",
+            command=self._open_summary_config,
+            bg="#95a5a6",
+            fg="white",
+            font=("微软雅黑", 10, "bold"),
+            padx=12,
+            pady=4,
+        ).pack(side=tk.LEFT)
 
         # 分隔线
         sep = tk.Frame(self.root, height=2, bd=1, relief=tk.SUNKEN)
@@ -4307,10 +4248,9 @@ class BatchPrintGUI:
     def _set_busy(self, busy):
         """切换按钮启用状态"""
         state = tk.DISABLED if busy else tk.NORMAL
-        self.run_all_btn.config(state=state)
-        self.merge_only_btn.config(state=state)
-        self.merge_payroll_btn.config(state=state)
-        self.merge_payroll_no_print_btn.config(state=state)
+        self.adv_merge_btn.config(state=state)
+        self.merge_payroll_simple_btn.config(state=state)
+        self.print_payroll_btn.config(state=state)
         self.root.update_idletasks()
 
     # ── 执行全部并打印 ──────────────────────────────
@@ -4840,8 +4780,72 @@ class BatchPrintGUI:
                 self.log_warning(f"    - {w}")
 
         self.log("")
+        self._last_merged_payroll_dir = self.payroll_output_dir
         self.log("工资表合并完成。")
         self.log("=" * 50)
+        self._set_busy(False)
+
+    # ── 打印工资表目录 ──────────────────────────
+
+    def run_print_payroll_dir(self):
+        if not check_wps_available():
+            messagebox.showwarning("提示", "WPS Office 不可用，无法打印")
+            self.log("  ✗ WPS Office 不可用，无法打印")
+            return
+
+        if self._last_merged_payroll_dir and os.path.isdir(self._last_merged_payroll_dir):
+            print_dir = self._last_merged_payroll_dir
+            self.log(f"  使用最近合并的工资表目录：{print_dir}")
+        else:
+            print_dir = filedialog.askdirectory(title="选择要打印的工资表目录")
+            if not print_dir:
+                self.log("  用户取消选择目录")
+                return
+            print_dir = os.path.normpath(print_dir)
+            self.log(f"  用户选择目录：{print_dir}")
+
+        files = []
+        for fname in os.listdir(print_dir):
+            fpath = os.path.join(print_dir, fname)
+            if os.path.isfile(fpath) and fname.lower().endswith('.xlsx'):
+                files.append(fpath)
+        files.sort()
+
+        if not files:
+            messagebox.showinfo("提示", f"目录「{print_dir}」中没有找到 .xlsx 文件")
+            self.log(f"  ⚠ 目录中没有找到 .xlsx 文件：{print_dir}")
+            return
+
+        self.log(f"  找到 {len(files)} 个工资表文件：")
+        for f in files:
+            self.log(f"    • {os.path.basename(f)}")
+
+        ok = messagebox.askyesno(
+            "确认打印",
+            f"将打印 {len(files)} 个工资表文件，是否继续？",
+        )
+        if not ok:
+            self.log("  用户取消打印")
+            return
+
+        self._set_busy(True)
+        self.log("")
+        self.log("开始打印...")
+
+        success = 0
+        fail = 0
+        for i, fpath in enumerate(files):
+            basename = os.path.basename(fpath)
+            self.log(f"  [{i+1}/{len(files)}] 正在打印: {basename}")
+            ok = print_file(fpath)
+            if ok:
+                success += 1
+            else:
+                fail += 1
+                self.log_warning(f"  ✗ 打印失败: {basename}")
+
+        self.log("")
+        self.log(f"打印完成：成功 {success}，失败 {fail}")
         self._set_busy(False)
 
     # ── 验证规则配置 ──────────────────────────
