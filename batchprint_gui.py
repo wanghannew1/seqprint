@@ -1886,7 +1886,7 @@ def check_wps_available():
         return False
 
 
-def print_file(filepath, progress_callback=None):
+def print_file(filepath, progress_callback=None, repeat_header=True):
     """
     打印单个 Excel 文件
     参数:
@@ -1914,13 +1914,16 @@ def print_file(filepath, progress_callback=None):
             wb = app.Workbooks.Open(filepath)
             ws = wb.ActiveSheet
 
-            # WPS 页面设置：A4 横向 + 所有列缩放到一页 + 每页重复表头
+            # WPS 页面设置：A4 横向 + 所有列缩放到一页
             ws.PageSetup.Orientation = 2          # xlLandscape
             ws.PageSetup.PaperSize = 9            # xlPaperA4
             # Zoom 不设值，FitToPagesWide 已自动禁用百分比缩放
             ws.PageSetup.FitToPagesWide = 1       # 所有列缩放到一页宽
             ws.PageSetup.FitToPagesTall = 0       # 0=不限制行高页数
-            ws.PageSetup.PrintTitleRows = "$1:$5" # 每页重复表头
+            if repeat_header:
+                ws.PageSetup.PrintTitleRows = "$1:$5" # 每页重复表头（单工资表用）
+            else:
+                ws.PageSetup.PrintTitleRows = ""       # 合并工资表每页表头不同，不重复
 
             # 让含图片的行按内容自动调整行高，避免 PDF 行高压缩
             try:
@@ -4885,7 +4888,7 @@ class BatchPrintGUI:
         for i, fpath in enumerate(files):
             basename = os.path.basename(fpath)
             self.log(f"  [{i+1}/{len(files)}] 正在打印: {basename}")
-            ok = print_file(fpath)
+            ok = print_file(fpath, repeat_header=False)
             if ok:
                 success += 1
             else:
