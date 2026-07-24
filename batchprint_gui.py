@@ -407,7 +407,8 @@ def _format_yearmons(yearmons):
     return "、".join(parts)
 
 
-def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
+def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None,
+                          left_margin_cm=1.5, right_margin_cm=0.5):
     """
     合并工资表：扫描 signed_*.xlsx，按映射规则分组，每组输出一个 xlsx。
     最上方为虚拟表（大单位名+年月范围+全部列头+合计行），
@@ -930,6 +931,13 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
             tgt_ws.PageSetup.Zoom = False
             tgt_ws.PageSetup.FitToPagesWide = 1
             tgt_ws.PageSetup.FitToPagesTall = 9999
+            # 页边距（cm → 磅，1cm ≈ 28.35pt）
+            LEFT_MARGIN_PT = round(left_margin_cm * 28.35, 2)
+            RIGHT_MARGIN_PT = round(right_margin_cm * 28.35, 2)
+            tgt_ws.PageSetup.LeftMargin = LEFT_MARGIN_PT
+            tgt_ws.PageSetup.RightMargin = RIGHT_MARGIN_PT
+            # 合并后的工资表每页表头不同，不重复标题行
+            tgt_ws.PageSetup.PrintTitleRows = ""
 
             # ── 保存 ──
             ym_part = f"_{ym_display}" if ym_display else ""
@@ -2589,17 +2597,54 @@ def _load_summary_config():
     return _get_default_summary_fields()
 
 
-def _save_summary_config(fields):
-    """保存结算单元汇总字段配置。"""
+def _save_summary_config(fields, margins=None):
+    """保存结算单元汇总字段与打印边距配置。"""
     import json
     config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "summary_config.json")
+    cfg = {"fields": fields}
+    if margins:
+        cfg["margins"] = margins
+    # 保留已有边距（如果本次只存 fields）
+    elif os.path.isfile(config_file):
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                old = json.load(f)
+            if isinstance(old, dict) and "margins" in old:
+                cfg["margins"] = old["margins"]
+        except Exception:
+            pass
     with open(config_file, "w", encoding="utf-8") as f:
-        json.dump({"fields": fields}, f, ensure_ascii=False, indent=2)
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 
 def _get_default_summary_fields():
     """返回默认的结算单元汇总字段列表。"""
     return ["个人所得税", "个人工会会费", "工会经费", "实发合计", "实发工资"]
+
+
+def _load_print_margins():
+    """加载打印页边距配置，返回 (left_cm, right_cm)。"""
+    import json
+    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "summary_config.json")
+    if os.path.isfile(config_file):
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            if isinstance(cfg, dict) and "margins" in cfg:
+                m = cfg["margins"]
+                return (float(m.get("left_cm", 1.5)), float(m.get("right_cm", 0.5)))
+        except Exception:
+            pass
+    return (1.5, 0.5)
+
+
+def _save_print_margins(left_cm, right_cm):
+    """保存打印页边距到配置文件。"""
+    import json
+    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "summary_config.json")
+    cfg = {"fields": _load_summary_config(), "margins": {"left_cm": left_cm, "right_cm": right_cm}}
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 
 def validate_payroll_xlsx(filepath, canonical_cols, config=None, tolerance=None):
@@ -4756,9 +4801,12 @@ class BatchPrintGUI:
             self.root.update()
 
         try:
+            left_margin, right_margin = _load_print_margins()
             output_files, warnings, stats = merge_payrolls_simple(
                 self.payroll_dir, self.payroll_output_dir,
                 progress_callback=progress_cb,
+                left_margin_cm=left_margin,
+                right_margin_cm=right_margin,
             )
         except Exception as e:
             self.log(f"  ✗ 合并失败：{e}")
@@ -5154,6 +5202,24 @@ class SummaryConfigDialog:
         self.custom_items = [c for c in self.fields if c not in all_known_cols]
         self._rebuild_custom_tags()
 
+        # ── 打印页边距 ──
+        margin_frame = tk.LabelFrame(main_frame, text="打印页边距（厘米）", padx=8, pady=4)
+        margin_frame.pack(fill=tk.X, pady=(0, 8))
+
+        self._margin_left, self._margin_right = _load_print_margins()
+
+        tk.Label(margin_frame, text="左边距：", font=("微软雅黑", 9)).pack(side=tk.LEFT)
+        self.margin_left_var = tk.StringVar(value=str(self._margin_left))
+        tk.Spinbox(margin_frame, from_=0, to=5, increment=0.1,
+                   textvariable=self.margin_left_var, width=6,
+                   font=("微软雅黑", 9)).pack(side=tk.LEFT, padx=(0, 12))
+
+        tk.Label(margin_frame, text="右边距：", font=("微软雅黑", 9)).pack(side=tk.LEFT)
+        self.margin_right_var = tk.StringVar(value=str(self._margin_right))
+        tk.Spinbox(margin_frame, from_=0, to=5, increment=0.1,
+                   textvariable=self.margin_right_var, width=6,
+                   font=("微软雅黑", 9)).pack(side=tk.LEFT)
+
         # ── 底部按钮 ──
         btn_bar = tk.Frame(main_frame)
         btn_bar.pack(fill=tk.X, pady=(10, 0))
@@ -5229,7 +5295,13 @@ class SummaryConfigDialog:
         selected = [col for col, var in self.check_vars.items() if var.get()]
         selected.extend(self.custom_items)
         try:
-            _save_summary_config(selected)
+            left = round(float(self.margin_left_var.get()), 1)
+            right = round(float(self.margin_right_var.get()), 1)
+        except ValueError:
+            messagebox.showerror("错误", "页边距必须为有效数字", parent=self.dialog)
+            return
+        try:
+            _save_summary_config(selected, margins={"left_cm": left, "right_cm": right})
             if self.log_callback:
                 self.log_callback(f"  ✓ 结算单元汇总设置已保存（{len(selected)} 个字段）")
             messagebox.showinfo("成功", "结算单元汇总设置已保存", parent=self.dialog)
@@ -5238,31 +5310,6 @@ class SummaryConfigDialog:
 
     def _on_close(self):
         self.dialog.destroy()
-        btn_bar.pack(fill=tk.X, pady=(10, 0))
-
-        tk.Button(btn_bar, text="保存", command=self._save_config,
-                  bg="#4a90d9", fg="white", font=("微软雅黑", 10, "bold"),
-                  padx=20, pady=2).pack(side=tk.RIGHT, padx=(8, 0))
-        tk.Button(btn_bar, text="全选", command=self._select_all,
-                  padx=12, pady=2).pack(side=tk.RIGHT, padx=(8, 0))
-        tk.Button(btn_bar, text="取消全选", command=self._deselect_all,
-                  padx=12, pady=2).pack(side=tk.RIGHT, padx=(8, 0))
-        tk.Button(btn_bar, text="关闭", command=self._on_close,
-                  padx=12, pady=2).pack(side=tk.RIGHT)
-
-        # 居中并显示
-        self.dialog.update_idletasks()
-        w = max(self.dialog.winfo_reqwidth(), 320)
-        h = max(self.dialog.winfo_reqheight(), 420)
-        pw = parent.winfo_width()
-        ph = parent.winfo_height()
-        px = parent.winfo_rootx()
-        py = parent.winfo_rooty()
-        x = px + (pw - w) // 2
-        y = py + (ph - h) // 2
-        self.dialog.geometry(f"{w}x{h}+{max(0,x)}+{max(0,y)}")
-        self.dialog.grab_set()
-        self.dialog.wait_window()
 
     def _select_all(self):
         for var in self.check_vars.values():
