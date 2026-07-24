@@ -908,6 +908,16 @@ def merge_payrolls_simple(payroll_dir, output_dir, progress_callback=None):
                     tgt_ws.Paste(tgt_cell)
 
                     app.CutCopyMode = False
+
+                    # ── 制表人右对齐 ──
+                    for _rr in range(current_row, current_row + src_last_row):
+                        for _cc in range(1, src_last_col + 1):
+                            _cell = tgt_ws.Cells(_rr, _cc)
+                            _v = _cell.Value
+                            if _v is not None and isinstance(_v, str) and "制表人" in str(_v):
+                                _cell.HorizontalAlignment = -4152
+                                break
+
                     src_wb.Close(SaveChanges=False)
 
                     current_row += src_last_row + 3  # 表间空三行
