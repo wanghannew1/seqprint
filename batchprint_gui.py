@@ -5147,7 +5147,7 @@ class ValidationConfigDialog:
 
 
 class SummaryConfigDialog:
-    """结算单元汇总字段配置对话框"""
+    """结算单元汇总字段 + 打印页边距配置对话框"""
 
     def __init__(self, parent, log_callback=None):
         self.parent = parent
@@ -5155,16 +5155,17 @@ class SummaryConfigDialog:
         self.fields = _load_summary_config()
 
         self.dialog = tk.Toplevel(parent)
-        self.dialog.title("结算单元汇总设置")
+        self.dialog.title("汇总设置")
         self.dialog.transient(parent)
         self.dialog.resizable(True, True)
 
         main_frame = tk.Frame(self.dialog, padx=16, pady=12)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
+        # ── 结算单元汇总字段 ──
         tk.Label(main_frame, text="选择需要在结算单元汇总表中显示的字段：",
                  font=("微软雅黑", 10, "bold"), anchor=tk.W).pack(fill=tk.X, pady=(0, 4))
-        tk.Label(main_frame, text="勾选预设列或在下方输入自定义列名（工资表中实际存在的列才生效，不存在的自动跳过）",
+        tk.Label(main_frame, text="勾选预设列或在下方输入自定义列名（不存在的列自动跳过）",
                  font=("微软雅黑", 9), fg="#666", anchor=tk.W).pack(fill=tk.X, pady=(0, 8))
 
         # ── 预设列复选框 ──
@@ -5196,7 +5197,6 @@ class SummaryConfigDialog:
         tk.Button(entry_row, text="添加", command=self._add_custom,
                   font=("微软雅黑", 9), padx=10).pack(side=tk.RIGHT)
 
-        # 已添加的自定义列标签
         self.custom_tags_frame = tk.Frame(custom_frame)
         self.custom_tags_frame.pack(fill=tk.X)
         self.custom_items = [c for c in self.fields if c not in all_known_cols]
@@ -5272,9 +5272,7 @@ class SummaryConfigDialog:
             tk.Label(tag, text=item, font=("微软雅黑", 9)).pack(side=tk.LEFT)
             tk.Label(tag, text=" ×", fg="red", font=("微软雅黑", 9, "bold"),
                      cursor="hand2").pack(side=tk.LEFT, padx=(4, 0))
-            # 用 lambda 绑定删除
             tag.bind("<Button-1>", lambda e, x=item: self._remove_custom(x))
-            # 让标签内所有子部件也响应点击
             for child in tag.winfo_children():
                 child.bind("<Button-1>", lambda e, x=item: self._remove_custom(x))
 
@@ -5303,29 +5301,8 @@ class SummaryConfigDialog:
         try:
             _save_summary_config(selected, margins={"left_cm": left, "right_cm": right})
             if self.log_callback:
-                self.log_callback(f"  ✓ 结算单元汇总设置已保存（{len(selected)} 个字段）")
-            messagebox.showinfo("成功", "结算单元汇总设置已保存", parent=self.dialog)
-        except Exception as e:
-            messagebox.showerror("错误", f"保存失败: {e}", parent=self.dialog)
-
-    def _on_close(self):
-        self.dialog.destroy()
-
-    def _select_all(self):
-        for var in self.check_vars.values():
-            var.set(True)
-
-    def _deselect_all(self):
-        for var in self.check_vars.values():
-            var.set(False)
-
-    def _save_config(self):
-        selected = [col for col, var in self.check_vars.items() if var.get()]
-        try:
-            _save_summary_config(selected)
-            if self.log_callback:
-                self.log_callback(f"  ✓ 结算单元汇总设置已保存（{len(selected)} 个字段）")
-            messagebox.showinfo("成功", "结算单元汇总设置已保存", parent=self.dialog)
+                self.log_callback(f"  ✓ 汇总设置已保存（{len(selected)} 个字段）")
+            messagebox.showinfo("成功", "汇总设置已保存", parent=self.dialog)
         except Exception as e:
             messagebox.showerror("错误", f"保存失败: {e}", parent=self.dialog)
 
