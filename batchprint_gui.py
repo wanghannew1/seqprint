@@ -4848,6 +4848,15 @@ class BatchPrintGUI:
             print_dir = self._last_merged_payroll_dir
             self.log(f"  使用最近合并的工资表目录：{print_dir}")
         else:
+            ok = messagebox.askyesno(
+                "打印工资表",
+                "暂无生成的工资表，如果要打印请选择目录。\n"
+                "将打印目录下所有 .xlsx 文件，不含子目录。\n\n"
+                "是否选择目录？",
+            )
+            if not ok:
+                self.log("  用户取消，无最近合并工资表目录")
+                return
             print_dir = filedialog.askdirectory(title="选择要打印的工资表目录")
             if not print_dir:
                 self.log("  用户取消选择目录")
