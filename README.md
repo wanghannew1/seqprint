@@ -22,7 +22,12 @@
    powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
 
-2. 双击 `run_batch_print.ps1` 启动，脚本会自动安装依赖并运行。
+2. Windows 11 首次运行前，先解除脚本安全锁定（解禁后只需执行一次）：
+   ```powershell
+   Unblock-File -Path "run_batch_print.ps1"
+   ```
+
+3. 双击 `run_batch_print.ps1` 启动，脚本会自动安装依赖并运行。
    （pyproject.toml 已配置清华镜像源，下载速度更快）
 
 ### 方式二：使用 uv pip（已有 uv 环境时）
