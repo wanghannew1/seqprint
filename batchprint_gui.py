@@ -77,6 +77,8 @@ def _to_decimal(val):
     try:
         if isinstance(val, str):
             val = val.replace(",", "").strip()
+        if isinstance(val, float):
+            val = round(val, 2)
         d = Decimal(str(val))
         # 检查是否有分以下的数值（厘）
         truncated = d.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
